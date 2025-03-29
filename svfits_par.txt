@@ -1,0 +1,39 @@
+*
+*
+* I/O Files
+*
+NFILE          16
+*PATH                     ! directory containing raw files (default CWD)
+INPUT          0.dat,1.dat,2.dat,3.dat,4.dat,5.dat,6.dat,7.dat,8.dat,9.dat,10.dat,11.dat,12.dat,13.dat,14.dat,15.dat
+FITS           TEST.FITS
+*
+* Observing Parameters
+*
+ANTMASK        1073741823 ! all 30 antennas
+EPOCH          2000.0000  !Output Epoch (EPOCH<0.0 ==> date co-ordinates)
+IATUTC         37.0       !(IAT-UTC [seconds])
+COORD_TYPE     DEFAULT    ! Co-ord Type (Options: DEFAULT/APPARENT/MEAN)
+RA_APP         0.523598775598 ! Apparent RA (radians)
+DEC_APP        0.785398163397 ! Apparent DEC (radians)
+RA_MEAN        0.523598775598 ! Mean RA (radians)
+DEC_MEAN       0.785398163397 ! Mean Dec (radians)
+*
+* Burst Parameters
+*
+BURST_NAME     BURST1     !
+BURST_MJD      60676      !
+BURST_TIME     100.0      ! arrival time at burst_freq (sec)
+BURST_DT       0.1        ! error in arrival time (sec)
+BURST_INTWD    1.0e-3     ! intrisic width (sec)
+BURST_WIDTH    2.4        ! observed burst width (sec)
+BURST_DM       300        ! DM of the burst
+BURST_DDM      0.1        ! error in the DM
+BURST_FREQ     7.0e8      ! Freq that the BURST_TIME refers to (Hz)
+BURST_BM_ID    1          ! ID of the beam that the burst was found in
+BURST_RA       50.1       ! RA of the beam containing burst (apparent)
+BURST_DEC      45.1       ! DEC of the beam containing burst (apparent)
+*
+*FLAG PARAMS
+*
+DO_FLAG        1          !do robust statsistics based flagging
+THRESH         5          !threshold for flagging
