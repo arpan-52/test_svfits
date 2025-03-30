@@ -15,16 +15,16 @@ const char cont_char = '*', begin_char = '{', end_char = '}';
 
 // The enum and the char array need to match exactly, and are used to
 // parse the input parameter file.
-enum {NFiles,Path,InputFile,FitsFile,AntMask,IATUTC,Epoch,CoordType,
+enum {NFiles,Path,InputFile,FitsFile,AntMask,IATUTC,Epoch,ObsMjd,CoordType,
       RaApp,DecApp,RaMean,DecMean,StokesType,BurstName,BurstMJD,BurstTime,
       BurstDT,BurstIntWd,BurstWd,BurstDM,BurstDDM,BurstFreq,BurstBmId,BurstRa,
       BurstDec,DoFlag,Thresh,SvVars} SvVarType ;
 char *SvVarname[SvVars] =
-  {"NFILE","PATH","INPUT","FITS","ANTMASK","IATUTC","EPOCH","COORD_TYPE",
-   "RA_APP","DEC_APP","RA_MEAN","DEC_MEAN","STOKES_TYPE","BURST_NAME",
-   "BURST_MJD","BURST_TIME","BURST_DT","BURST_INTWD","BURST_WIDTH","BURST_DM",
-   "BURST_DDM","BURST_FREQ","BURST_BM_ID","BURST_RA","BURST_DEC","DO_FLAG",
-   "THRESH"};
+  {"NFILE","PATH","INPUT","FITS","ANTMASK","IATUTC","EPOCH","OBS_MJD",
+   "COORD_TYPE","RA_APP","DEC_APP","RA_MEAN","DEC_MEAN","STOKES_TYPE",
+   "BURST_NAME","BURST_MJD","BURST_TIME","BURST_DT","BURST_INTWD",
+   "BURST_WIDTH","BURST_DM","BURST_DDM","BURST_FREQ","BURST_BM_ID",
+   "BURST_RA","BURST_DEC","DO_FLAG","THRESH"};
 static double K0=4.15e-3; // DM constant in seconds
 
 static float RefFreq,ChanWidth; // NEED TO SET THESE!!!
@@ -167,6 +167,7 @@ int svuserInp (char *filename, SvSelectionType *user ){
       case AntMask  :sscanf(p,"%u",&user->antmask);break;
       case FitsFile :sscanf(p,"%s", user->fitsfile);break ;
       case IATUTC   :sscanf(p,"%f",&user->iatutc);break ;
+      case ObsMjd   :sscanf(p,"%lf",&user->corr->daspar.mjd_ref);break ;
       case Epoch    :sscanf(p,"%lf",&user->epoch);break;
       case CoordType:strcpy(user->coord_type,p);break;
       case RaApp    :sscanf(p,"%lf",&user->srec->scan->source.ra_app);break;
@@ -184,7 +185,7 @@ int svuserInp (char *filename, SvSelectionType *user ){
       case BurstFreq:sscanf(p,"%lf",&user->burst.f);break;
       case BurstBmId:sscanf(p,"%d",&user->burst.bm_id);break;
       case BurstRa  :sscanf(p,"%lf",&user->burst.ra_app);break;
-      case BurstDec :sscanf(p,"%lf",&user->burst.ra_app);break;
+      case BurstDec :sscanf(p,"%lf",&user->burst.dec_app);break;
       case DoFlag   :sscanf(p,"%d",&user->do_flag);break;
       case Thresh   :sscanf(p,"%f",&user->thresh);break;
     }
@@ -1021,8 +1022,88 @@ int copy_sel_chans(SvSelectionType *user, int idx, char **outbuf){
   return copied; // total number of visibility records 
 }
 /*
+  simulate visibilities. Assumes a point source at the location given by
+  burst->ra_app,burst->dec_app. Only visibilities for the output baselines
+  (i.e. those with antennas in user->antmask) are computed. Visibilities are
+  computed at time tm, and for channels between [c0,c1). Output visibilities
+  in half float format are returned in rbuf, and the offset appropriate for
+  the selected baselines and channels. The calling program should ensure than
+  rbuf has enough space allocated.
+  
+  jnc mar 25
+*/
+int simulate_visibilities(SvSelectionType *user, double tm, char *rbuf,
+			  int c0,int c1){
+  CorrType        *corr=user->corr;
+  BurstParType    *burst=&user->burst;
+  ScanInfoType    *scan=user->srec->scan;
+  SourceParType   *source=&scan->source;
+  double           freq0=source->freq[0];
+  double           df=source->ch_width*source->net_sign[0];//signed
+  BaseParType     *base=corr->baseline;
+  unsigned int     antmask=user->antmask; // antennas in use
+  int              channels=corr->daspar.channels;
+  int              baselines=corr->daspar.baselines;
+  int              stokes=user->stokes;
+  int              i,b,c;
+  unsigned long    off;
+  BaseUvwType      uvw[MAX_ANTS];
+  float            freq,u,v,w,l,m,n,re,im,dec,dec0,d_alpha;
+  _Float16        *vis;
+
+  
+  if (baselines < 1)
+    {fprintf(stderr,"Illegal Nbaselines %d\n",baselines); return -1 ;}
+  if ((stokes != 1) && (stokes != 2) &&(stokes !=4))
+    {fprintf(stderr,"Illegal Nstokes %d (Legal 1/2/4)\n",stokes);return -1;}
+  if(c0<0 || c0>channels||c1<0 || c1>channels){
+      fprintf(stderr,"Illegal ChanRnge %d %d (Legal 0 - %d)\n",c0,c1,
+	       channels);return -1;
+  }
+
+  //compute uvw coordinates
+  for (i=0; i<MAX_ANTS; i++)
+  { uvw[i].bx = user->corr->antenna[i].bx ;
+    uvw[i].by = user->corr->antenna[i].by ;
+    uvw[i].bz = user->corr->antenna[i].bz ;
+  }
+  svgetUvw(tm,corr->daspar.mjd_ref,source,uvw); //units metres/C 
+
+  //compute l,m,n coordinates from AIPS Memo27 Griesen(83,94) SIN projection
+  dec=burst->dec_app;
+  dec0=source->dec_app;
+  d_alpha=burst->ra_app-source->ra_app;
+  l=cos(dec)*sin(d_alpha);
+  m=sin(dec)*cos(dec0)-cos(dec)*sin(dec0)*cos(d_alpha);
+  n=1.0-sqrt(1.0-l*l-m*m);
+  //compute visibilities
+  for(b=0;b<baselines;b++){
+    int a0=base[b].samp[0].ant_id,a1=base[b].samp[1].ant_id;
+    int b0=base[b].samp[0].band,b1=base[b].samp[1].band;
+    if(a0==a1) continue; // ignore selfs
+    if(!(1<<a0 & antmask)) continue; //ignore flagged antennas
+    if(!(1<<a1 & antmask)) continue;
+    if(b0 !=b1) continue; // ignore cross pol
+    for(c=c0;c<c1;c++){
+      freq=freq0+c*df;
+      u=(uvw[a1].u-uvw[a0].u)*freq;
+      v=(uvw[a1].v-uvw[a0].v)*freq;
+      w=(uvw[a1].w-uvw[a0].w)*freq;
+      re=cos(2.0*M_PI*(u*l+v*m+w*n));
+      im=sin(2.0*M_PI*(u*l+v*m+w*n));
+      // offset to this channel
+      off=sizeof(struct timeval)+(b*channels+c)*sizeof(float); 
+      vis=(_Float16*)(rbuf+off);
+      vis[0]=(_Float16)re;
+      vis[1]=(_Float16)im;
+    }
+  }
+
+  return 0;
+}
+/*
   like copy_sel_chans() except that no visibility files are read, instead
-  some fake data is generated for debugging.
+  some simulated data is generated for debugging.
   
   jnc mar 25
 */
@@ -1097,6 +1178,7 @@ int fake_sel_chans(SvSelectionType *user, int idx, char **outbuf){
       c1=c0+n_chan;
     }
     tm_m=tm+user->timestamp_off;// middle of rec
+    if(simulate_visibilities(user, tm_m,rbuf,c0,c1))return -1;
     svgetUvw(tm_m,corr->daspar.mjd_ref,source,uvw);
     JD = corr->daspar.mjd_ref + 2400000.5 + tm_m/86400 ;
     date1 = (int) JD ;
@@ -1111,8 +1193,8 @@ int fake_sel_chans(SvSelectionType *user, int idx, char **outbuf){
 	uvwpar=(UvwParType*)(obuf+off);//uvw for this group
 	out=(Cmplx3Type*)(obuf+off+sizeof(UvwParType));//data for this group
 	for(b1=b;b1<b+vispar->vis_sets;b1++){
-	  in=(_Float16*)(rbuf+vinfo[b1].off)+2*c;//input data for this chan
-	  in[0]=1.0;in[1]=0.0;
+	  //input data for this chan
+	  in=(_Float16*)(rbuf+vinfo[b1].off+c*sizeof(float));
 	  out->r=(float)in[0]; out->i=(float)in[1];
 	  noise=drand48()-0.5;out->r +=0.1*noise;
 	  noise=drand48()-0.5;out->i +=0.1*noise;
@@ -1211,3 +1293,5 @@ int clip(char *visbuf, SvSelectionType *user, int groups){
 
   return flagged;
 }
+
+
