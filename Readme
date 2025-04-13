@@ -16,14 +16,18 @@ Some details on the files in this commit are given below.
 
 Readme -- this file.
 
+read_rawvis.py   A python program to read the raw 1.3ms visibility files, average together the data in multiple user selected ways, generate plots, overplot the channel selection done by svfits.c etc. Mainly for debugging use.
+
 stats.c -- No change
 
-svfits.c -- No change
+svfits.c -- Added the option to process each raw visibility file in chunks, so
+as to reduce the memory requirement. This may not really be needed, and may be removed later to keep the code from getting unneccessarily complex. Also added the option to produce a regular multi-channel UV FITS file by copying all channels. This is helpful maily for debugging. In this mode added the options to do amplitude bandpass calibration as well as subtracting the mean visibility (computed over all records in the slice) from the data. Also added the options to update the burst parameters based on the burst MJD and burst intrinsic width - these are the two parameters expected to be provided by the SPOTLIGHT pipeline.
 
-svfits_par.txt -- parameters tuned to give a simulated source at an offset position.
+svfits_par.txt -- added the parameters related to the added options in svfits.c, viz, to copy all channels, to update the burst data, do amplitude bandpass calibration
 
-svio.h -- No change
+svio.h -- changes to accomodate the added options to svfits.
 
-svsubs.c -- modified to inject a point source at an offset position. See simulate_visibilites() for more details.
+svsubs.c -- changes to update the burst parameters (see update_burst()), copy
+all channels (copy_all_chans), accept the frequency settings at one go, correct for the fact that the timeval is present only at the start of the slice, and that the timeval is the same for the same slice in all files, copy the data in chunks (see copy_sel_chans()), do amplitude bandpass calibration and subtract the mean over the slice (make_bpass()) etc.
 
 utils.c -- No change

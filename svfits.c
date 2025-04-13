@@ -20,6 +20,24 @@
   details see copy_sel_chans().
 
   JNC March 2025
+
+  added code to limit the amount of memory used at a given time, files can
+  be processed chunk by chunk in case the memory needed to process the entire
+  burst data in a given file exceeds the limit. (This may not be really needed,
+  and I might remove it in future to keep the code from getting unneccessarily
+  complex).
+
+  added the option to copy all channels, instead of just the channels containing
+  the burst signal. This produces a regular multi-channel random groups UV file.
+  This mode is helpful mainly for debuging. In this mode options to do
+  amplitude bandpass calibration, and to remove the mean visibility over
+  the entire slice have also been provided. The idea is to provide them also
+  in the regular mode (i.e. where only the burst signal is copied into a
+  single channel output file). Also added the option of updating the burst
+  parameters based on the burst MJD and the burst intrinsic width (these
+  are the two parameters expected from the SPOTLIGHT pipeline).
+
+  jnc apr 2025
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -434,7 +452,7 @@ int init_hdr( fitsfile *fptr, SvSelectionType *user, int pcount, int *status,
   naxes[0]=0;
   naxes[1]=3;
   naxes[2]= user->stokes ;
-  naxes[3]= 1; //only 1 channel per random group for SPOTLIGHT
+  naxes[3]= user->channels; //default: 1 channel per random group for SPOTLIGHT
   naxes[4]= user->sidebands ;
   naxes[5]=1;
   naxes[6]=1;
@@ -573,7 +591,7 @@ int main (int argc, char **argv)
   InitHdrType    *hdr;
   RecFileParType *rfile=&user.recfile;
   SourceParType  *source;
-  int             c;
+  int             c,restart_rec;
   char            antfile[NAMELEN],uparfile[NAMELEN];
   extern char    *optarg;
   extern int      optind,opterr;
@@ -627,14 +645,20 @@ int main (int argc, char **argv)
 
   // read visibilties from raw files, write out randon groups to FITS FILE
   gcount=1;//FITS numbering starts from 1
-  group_size=user.stokes*sizeof(Cmplx3Type)+sizeof(UvwParType);
+  group_size=user.channels*user.stokes*sizeof(Cmplx3Type)+sizeof(UvwParType);
+  restart_rec=0;
   for(idx=0;idx<rfile->nfiles;idx++){
     if(user.fake_data){ // for debugging without having to read visibilities
-       if((groups=fake_sel_chans(&user,idx,&visbuf))<0)
+      if((groups=fake_sel_chans(&user,idx,&visbuf,&restart_rec))<0)
       {fprintf(stderr,"Error processing %s\n",rfile->fname[idx]);return -1;}
     }else{
-      if((groups=copy_sel_chans(&user,idx,&visbuf))<0)
-      {fprintf(stderr,"Error processing %s\n",rfile->fname[idx]);return -1;}
+      if(user.all_chan){// copy all channels
+	if((groups=copy_all_chans(&user,idx,&visbuf,0))<0)
+	  {fprintf(stderr,"Error processing %s\n",rfile->fname[idx]);return -1;}
+      }else{
+	if((groups=copy_sel_chans(&user,idx,&visbuf,&restart_rec))<0)
+	  {fprintf(stderr,"Error processing %s\n",rfile->fname[idx]);return -1;}
+      }
     }
     if(user.do_flag){
       if((flagged=clip(visbuf,&user,groups))<0)return -1;
@@ -649,6 +673,7 @@ int main (int argc, char **argv)
     fprintf(stderr,"File %d wrote %12.4e MBytes\n",idx,(1.0*k)/1.0e6);
     gcount += groups;
     free(visbuf);
+    if(restart_rec>0)idx--; //copy next chunk from the same file
   }
   gcount--; // total number of groups written
   if(ffukyj(fptr,"GCOUNT",gcount," ",&status)) return printerror(status);

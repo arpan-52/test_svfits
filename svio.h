@@ -104,6 +104,10 @@ typedef struct burst_par_type{
   double ra_app,dec_app;   // apparent ra,dec of the beam containing the burst;
 } BurstParType;
 
+typedef struct bpass_type{
+  Cmplx3Type *mean[MAX_BASE];// mean of re,im over the slice
+  float      *abp[MAX_BASE]; // normalized amplitude of the bandpass
+}BpassType;
 typedef struct sv_selection_type
 { int              scans, baselines , antennas ;
   unsigned int     antmask ;
@@ -115,6 +119,7 @@ typedef struct sv_selection_type
   double           epoch,timestamp_off;
   char             coord_type[NAMELEN];
   VisParType       vispar ;
+  BpassType        bpass;
   InitHdrType     *hdr  ;
   CorrType        *corr ;
   ScanRecType     *srec ;
@@ -122,9 +127,12 @@ typedef struct sv_selection_type
   FILE            *lfp;
   RecFileParType   recfile;  
   BurstParType     burst;
-  int              do_flag;
   int              update_burst; //compute burst params (see update_burst())
-  float            thresh;
+  int              do_flag; // mad based flagging of data 
+  float            thresh; // threshold for flagging (units of mad)
+  int              all_chan;//ignore BurstPar and copy all chans (debug use)
+  int              do_band;// apply amplitude bandpass calibration
+
 } SvSelectionType ;
 
 // various structures used while making FITS file tables
@@ -191,10 +199,12 @@ typedef struct
   float *rbuf,*ibuf, *xbuf, *parbuf ;
 } FitBufType ;
 
-
-int     copy_sel_chans(SvSelectionType *user, int idx, char **buf);
+int copy_all_chans(SvSelectionType *user, int idx, char **outbuf, int restart);
+int     copy_sel_chans(SvSelectionType *user, int idx, char **buf,int *restart);
 int     clip(char *visbuf, SvSelectionType *user, int groups);
-int     fake_sel_chans(SvSelectionType *user, int idx, char **buf);
+int     fake_sel_chans(SvSelectionType *user, int idx, char **buf,int *restart);
+unsigned short  float_to_half(const float x);
+float   half_to_float(const unsigned short x);
 int     init_user(SvSelectionType *user, char *fname, char *fname1);
 double  lmst(double mjd);
 char   *mjd2iau_date(double mjd);

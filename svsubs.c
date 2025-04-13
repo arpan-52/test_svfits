@@ -15,16 +15,17 @@ const char cont_char = '*', begin_char = '{', end_char = '}';
 
 // The enum and the char array need to match exactly, and are used to
 // parse the input parameter file.
-enum {NFiles,Path,InputFile,FitsFile,AntMask,IATUTC,Epoch,ObsMjd,CoordType,
-      RaApp,DecApp,RaMean,DecMean,StokesType,BurstName,BurstMJD,BurstTime,
-      BurstDT,BurstIntWd,BurstWd,BurstDM,BurstDDM,BurstFreq,BurstBmId,BurstRa,
-      BurstDec,DoFlag,Thresh,SvVars} SvVarType ;
+enum {NFiles,Path,InputFile,FitsFile,AntMask,AllChan,IATUTC,Epoch,ObsMjd,
+      FreqSet,CoordType,RaApp,DecApp,RaMean,DecMean,StokesType,BurstName,
+      BurstMJD,BurstTime,BurstDT,BurstIntWd,BurstWd,BurstDM,BurstDDM,BurstFreq,
+      BurstBmId,BurstRa,BurstDec,UpdateBurst,DoFlag,Thresh,DoBand,
+      SvVars} SvVarType ;
 char *SvVarname[SvVars] =
-  {"NFILE","PATH","INPUT","FITS","ANTMASK","IATUTC","EPOCH","OBS_MJD",
-   "COORD_TYPE","RA_APP","DEC_APP","RA_MEAN","DEC_MEAN","STOKES_TYPE",
-   "BURST_NAME","BURST_MJD","BURST_TIME","BURST_DT","BURST_INTWD",
+  {"NFILE","PATH","INPUT","FITS","ANTMASK","ALL_CHAN","IATUTC","EPOCH",
+   "OBS_MJD","FREQ_SET","COORD_TYPE","RA_APP","DEC_APP","RA_MEAN","DEC_MEAN",
+   "STOKES_TYPE","BURST_NAME","BURST_MJD","BURST_TIME","BURST_DT","BURST_INTWD",
    "BURST_WIDTH","BURST_DM","BURST_DDM","BURST_FREQ","BURST_BM_ID",
-   "BURST_RA","BURST_DEC","DO_FLAG","THRESH"};
+   "BURST_RA","BURST_DEC","UPDATE_BURST","DO_FLAG","THRESH","DO_BAND"};
 static double K0=4.15e-3; // DM constant in seconds
 
 static float RefFreq,ChanWidth; // NEED TO SET THESE!!!
@@ -132,10 +133,13 @@ float svVersion(void){
   return 1.00;
 }
 int svuserInp (char *filename, SvSelectionType *user ){
-  char str[512],key_str[32] ;
-  int val[512];
-  FILE *fp = fopen(filename, "rt") ;
-  int var, np, k ;
+  CorrType      *corr=user->corr;
+  DasParType    *daspar=&user->corr->daspar;
+  SourceParType *source=&user->srec->scan->source;
+  char           str[512],key_str[32] ;
+  int            val[512];
+  FILE          *fp = fopen(filename, "rt") ;
+  int            var, np, k ;
  
   while ( fgets(str, 500, fp) )
   { char *p = str ;
@@ -154,20 +158,33 @@ int svuserInp (char *filename, SvSelectionType *user ){
     while (*p && isspace((int)*p))p++ ;
     for(k=strlen(p);k>=0;k--)if(p[k]=='!'){p[k]='\0';break;}
     switch(var){
-      int i;
+      int i,nchan;
+      double freq0,freq1;
       char *f;
       case NFiles   :sscanf(p,"%d",&user->recfile.nfiles); break;
       case Path     :strncpy(user->recfile.path,p,PATHLEN-1); break;
-      case InputFile: f=strtok(p,",");i=0;
+      case InputFile:f=strtok(p,",");i=0;
                       while(f!=NULL && i < user->recfile.nfiles){
 	 	      strcpy(user->recfile.fname[i],f);f=strtok(NULL,",");
 		      i++;
 		     }
 		     break;
       case AntMask  :sscanf(p,"%u",&user->antmask);break;
+      case AllChan  :sscanf(p,"%d",&user->all_chan);break;
       case FitsFile :sscanf(p,"%s", user->fitsfile);break ;
       case IATUTC   :sscanf(p,"%f",&user->iatutc);break ;
       case ObsMjd   :sscanf(p,"%lf",&user->corr->daspar.mjd_ref);break ;
+      case FreqSet  :i=sscanf(p,"%lf:%lf:%d\n",&freq0,&freq1,&nchan);
+	             if(i!=3)
+		       {fprintf(stderr,"Format error in FREQ_SET %d\n",i); return -1;}
+        	     source->freq[0]=source->freq[1]=freq0; 
+                     source->ch_width=fabs(freq1-freq0)/nchan;
+		     if(freq1<freq0)
+		       source->net_sign[0]=source->net_sign[1]=-1;
+		     else
+		       source->net_sign[0]=source->net_sign[1]=1;
+                     corr->daspar.channels=nchan;
+		     break;
       case Epoch    :sscanf(p,"%lf",&user->epoch);break;
       case CoordType:strcpy(user->coord_type,p);break;
       case RaApp    :sscanf(p,"%lf",&user->srec->scan->source.ra_app);break;
@@ -186,8 +203,10 @@ int svuserInp (char *filename, SvSelectionType *user ){
       case BurstBmId:sscanf(p,"%d",&user->burst.bm_id);break;
       case BurstRa  :sscanf(p,"%lf",&user->burst.ra_app);break;
       case BurstDec :sscanf(p,"%lf",&user->burst.dec_app);break;
+      case UpdateBurst:sscanf(p,"%d",&user->update_burst);break;
       case DoFlag   :sscanf(p,"%d",&user->do_flag);break;
       case Thresh   :sscanf(p,"%f",&user->thresh);break;
+      case DoBand   :sscanf(p,"%d",&user->do_band);break;
     }
   }
 
@@ -200,6 +219,12 @@ int svuserInp (char *filename, SvSelectionType *user ){
 
    jnc mar 2025
    28mar25 fixed bug in loop order
+
+   corrected the offset to reflect that there is no timestamp at the start
+   of every record. Instead there is a timestamp at the start of every
+   rec_per_slice records. The timestamp is read separately in
+   copy_sel_chans() and so does not need to be reflected in the offsets
+   here.
 */
 int init_vispar(SvSelectionType *user){
 
@@ -216,10 +241,9 @@ int init_vispar(SvSelectionType *user){
   BaseParType   *base=corr->baseline;
   unsigned int   stride=corr->daspar.channels*sizeof(float); //half-float re,im
   unsigned long  off;
-  int            ant0,ant1,band,bs,bs1,recl,tv_size;
+  int            ant0,ant1,band,bs,bs1,recl;
 
-  recl=user->channels*sizeof(float); //datasize for one baseline
-  tv_size=sizeof(struct timeval);//input records start with a timeval struct
+  recl=corr->daspar.channels*sizeof(float); //datasize for one baseline
   vispar->vis_sets=user->stokes;
 
   // organize so that the output visibilities are in antenna collation order
@@ -240,7 +264,7 @@ int init_vispar(SvSelectionType *user){
 	    visinfo[bs1].ant0=ant0;visinfo[bs1].ant1=ant1;
 	    visinfo[bs1].band0=b0;visinfo[bs1].band1=b1;
 	    visinfo[bs1].drop=0; 
-	    visinfo[bs1].off=tv_size+bs*recl;
+	    visinfo[bs1].off=bs*recl;
 	    bs1++;break;
 	  }else{
 	    if(ant0==a1 && ant1==a0){
@@ -248,7 +272,7 @@ int init_vispar(SvSelectionType *user){
 	      visinfo[bs1].ant0=ant0;visinfo[bs1].ant1=ant1;
 	      visinfo[bs1].band0=b0;visinfo[bs1].band1=b1;
 	      visinfo[bs1].drop=0; 
-	      visinfo[bs1].off=tv_size+bs*recl;
+	      visinfo[bs1].off=bs*recl;
 	      bs1++;break;
 	    }
 	  }
@@ -559,7 +583,7 @@ int update_burst(SvSelectionType *user){
   unix_time=(i_mjd-40587.0)*86400.0+floor(f_mjd*86400); 
   tsec=f_mjd*86400;
   f_sec=tsec-floor(tsec);//fractional seconds
-  ctime_r(&unix_time,burst->date);
+  ctime_r(&unix_time,burst->date);//in IST now
   burst->date[strcspn(burst->date,"\n")]='\0';//remove trailing newline,if any
   sscanf(burst->date,"%*s %*s %*s %d:%d:%d %*s",&hh,&mm,&ss);
   burst->t=hh*3600+mm*60+ss+f_sec; //IST seconds
@@ -607,14 +631,16 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile){
   user->stokes_type=0; /* FITS stokes labels are RL */
   user->scans       = 1;
   user->sidebands   = 1;
+  user->all_chan    = 0;//ignore burst parms,copy all channels
   user->start_chan  = 0;
   user->chan_inc    = 1;
   user->force_app   = 1; // force coordinates to be treated as apparent
-  user->fake_data   = 1; // FOR DEBUGGING!!!! SET TO 0 FOR ACTUAL USE
+  user->fake_data   = 0; // FOR DEBUGGING!!!! SET TO 0 FOR ACTUAL USE
   user->do_log=20;
   user->do_flag=1;// flag visibilities with outlier amplitudes
   user->update_burst=1;//recompute parms with some as input (see update_burst())
   user->thresh=5.0;// threshold for MAD flagging
+  user->do_band=0; // do not do amplitude bandpass
   strcpy(user->fitsfile,"TEST.FITS") ;
   /* default parameters, reset by reading input scanfile*/
   user->hdr->scans=user->scans;
@@ -622,7 +648,7 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile){
     {fprintf(stderr,"Unable to open svfits.log\n"); return -1;}
   // initialize the correlator settings
   init_corr(user,antfile); // hardcoded for now
-  user->channels=corr->daspar.channels;
+  user->channels=1; //only one output channel by default
   user->antmask=1073741823;//30 antennas (C07 and S05 dropped)
   srec->corr=user->corr;
   srec->scannum=0;
@@ -653,10 +679,9 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile){
   burst->bm_id=0;
   burst->ra_app=source->ra_app; 
   burst->dec_app=source->dec_app;
-  if(user->update_burst)update_burst(user);
   /* default parameteters of the raw data files */
   rfile->nfiles=16;
-  rfile->path[0]='\0';
+  strcpy(rfile->path,".");
   for(i=0;i<rfile->nfiles;i++)
     sprintf(rfile->fname[i],"%d.dat",i);// NEED TO UPDATE TO CORRECT CONVENTION
   rfile->rec_per_slice=50; // 50 lta records per slice
@@ -670,12 +695,24 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile){
 
   // over ride defaults by parameters given by the user
   if(svuserInp(uparfile,user)) return -1;
-
+  if(user->all_chan) user->channels=corr->daspar.channels;
+  //update burst parameters
+  if(user->update_burst)update_burst(user);
   // setup the visibility meta data
   if((user->baselines=init_vispar(user))<=0)
     {fprintf(stderr,"No baselines selected!\n"); return -1;}
 
   return 0;
+}
+double unix_time_to_ist(time_t unix_time, double f_sec){
+  int    hh,mm,ss;
+  double t_ist;
+  char   date[256];
+  ctime_r(&unix_time,date);//in IST now
+  date[strcspn(date,"\n")]='\0';//remove trailing newline,if any
+  sscanf(date,"%*s %*s %*s %d:%d:%d %*s",&hh,&mm,&ss);
+  t_ist=hh*3600+mm*60+ss+f_sec; //IST seconds
+  return t_ist;
 }
 int get_rec_num(RecFileParType *rfile, int idx, BurstParType *burst,
 	       CorrType *corr, ScanInfoType *scan,int *start_rec,
@@ -692,9 +729,9 @@ int get_rec_num(RecFileParType *rfile, int idx, BurstParType *burst,
   double         t_burst,t_start,t_rec,fh,fl;
   int            start_slice,rec_num,r;
   FILE          *fp;
-  char          fname[LINELEN+PATHLEN+1];
-
-
+  char           fname[LINELEN+PATHLEN+1];
+  time_t         unix_time;
+  
   if(scan->source.net_sign[0]>0){fh=freq+corr->daspar.channels*cw;fl=freq;}
   else{fh=freq;fl=freq-corr->daspar.channels*cw;}
   
@@ -703,16 +740,19 @@ int get_rec_num(RecFileParType *rfile, int idx, BurstParType *burst,
 
   if(!fake_data){
     // get the start time of the file
-    fname[0]='\0';
+    strcpy(fname,"");
     if(rfile->path !=NULL){strcpy(fname,rfile->path);strcat(fname,"/");}
     strcat(fname,rfile->fname[idx]);
+    fname[strcspn(fname,"\n")]='\0';//remove trailing newline,if any
     if((fp=fopen(fname,"rb"))==NULL)
       {fprintf(stderr,"Unable to open %s\n",fname); return -1;}
-    if(fread(&tv,sizeof(struct timeval),1,fp) != sizeof(struct timeval))
+    if(fread(&tv,sizeof(struct timeval),1,fp) != 1)
       { fprintf(stderr,"Cannot read the starting time in file %s!\n",
 		rfile->fname[idx]);
 	return -1;}
-    t_start=tv.tv_sec+tv.tv_usec/1.0e6; // seconds; need to check if frame is ok
+    unix_time=tv.tv_sec; // seconds;
+    t_start=unix_time_to_ist(unix_time,tv.tv_usec/1.0e6);// IST
+    t_start+=idx*rec_per_slice*integ;//timeval is start only for file[0]!
     rfile->t_start[idx]=t_start;
   }else // use the hardcoded start time (debug use only)
     { t_start=rfile->t_start[idx];}
@@ -742,6 +782,7 @@ int get_rec_num(RecFileParType *rfile, int idx, BurstParType *burst,
   *n_rec=r;
 
   if(!fake_data) fclose(fp);
+  
 
 
   return 0;
@@ -889,10 +930,20 @@ void svgetUvw(double tm, double mjd_ref,SourceParType *source, BaseUvwType *uvw)
   order is mapped onto the output random group order.
 
   jnc mar 2025
+
+  added the option of reading the input file in max_bufsize sized chunks.
+  also updated the raw file format, the timestamp is included only once
+  at the start of a sice (i.e. at the start of every rec_per_slice records),
+  and not for every record.
+
+  jnc apr 2025
 */
-int copy_sel_chans(SvSelectionType *user, int idx, char **outbuf){
+int copy_sel_chans(SvSelectionType *user, int idx, char **outbuf,
+		   int *restart_rec){
   UvwParType      *uvwpar;
   RecFileParType  *rfile=&user->recfile;
+  int              n_slice,rec_per_slice=rfile->rec_per_slice;
+  double           slice_interval=rfile->slice_interval;
   CorrType        *corr=user->corr;
   BurstParType    *burst=&user->burst;
   ScanInfoType    *scan=user->srec->scan;
@@ -901,22 +952,24 @@ int copy_sel_chans(SvSelectionType *user, int idx, char **outbuf){
   double           df=source->ch_width*source->net_sign[0];//signed
   VisParType      *vispar=&user->vispar;
   VisInfoType     *visinfo=vispar->visinfo;
-  int              channels=user->channels;
+  int              channels=corr->daspar.channels;//input channels
   int              baselines=user->baselines;//output baselines
   int              stokes=user->stokes;
   double           epoch,epoch1=user->epoch;
-  int              recl,group_size,start_rec,n_rec,n_chan,copied;
+  int              group_size,start_rec,n_rec,n_chan,copied;
+  int              rec0,rec1,n_rec1;
   int              r,b,b1,i,date1,c,c0,c1,in_stride;
   double           tm,JD,date2,freq,noise;
   double           integ=corr->daspar.lta*corr->corrpar.statime;
-  unsigned long    off;
+  unsigned long    off,bufsize,max_bufsize,recl,timesize=sizeof(struct timeval);
   BaseUvwType      uvw[MAX_ANTS];
   char            *rbuf,*obuf;
-  _Float16        *in;
+  unsigned short  *in;
   Cmplx3Type      *out;
-  struct timeval  *tv;
+  struct timeval   tv;
   FILE            *lfp=user->lfp,*fp;
   char             fname[LINELEN+PATHLEN+1];
+  time_t           unix_time;
   
   if (baselines < 1)
     {fprintf(stderr,"Illegal Nbaselines %d\n",baselines); return -1 ;}
@@ -927,9 +980,10 @@ int copy_sel_chans(SvSelectionType *user, int idx, char **outbuf){
 	    idx,0,rfile->nfiles);
     return -1;
   }
-  fname[0]=0;
+  strcpy(fname,"");
   if(rfile->path !=NULL){strcpy(fname,rfile->path);strcat(fname,"/");}
   strcat(fname,rfile->fname[idx]);
+  fname[strcspn(fname,"\n")]='\0';//remove trailing newline,if any
   if((fp=fopen(fname,"rb"))==NULL){
     fprintf(stderr,"Unable to open %s\n",fname); return -1;}
 
@@ -939,30 +993,62 @@ int copy_sel_chans(SvSelectionType *user, int idx, char **outbuf){
     uvw[i].bz = user->corr->antenna[i].bz ;
   }
 
-  // allocate memory for read
-  recl=sizeof(struct timeval)+corr->daspar.baselines*corr->daspar.channels
-    *sizeof(float);
+  // allocate memory for read (timeval comes only once every rec_per_slice
+  // records and is read separately
+  recl=corr->daspar.baselines*corr->daspar.channels*sizeof(float);
   if((rbuf=malloc(recl))==NULL){fprintf(stderr,"Malloc Error!\n");return -1;}
-  // records containing data
-  get_rec_num(rfile,idx,burst,corr,scan,&start_rec,&n_rec,1);
+  // records containing data - last arg is for fake data
+  get_rec_num(rfile,idx,burst,corr,scan,&start_rec,&n_rec,0);
   // max chans containing data - add a safety margin for malloc
   n_chan=(int)rint(1.1*get_nchan(burst,corr,scan)); 
   // each random group contains data for all stokes and one channel
   group_size=sizeof(UvwParType)+sizeof(Cmplx3Type)*stokes;
-  *outbuf=(char*)malloc(n_rec*(baselines/stokes)*n_chan*group_size);
-  obuf=*outbuf;
+  max_bufsize=1024*1024*1024;// copy a maximum of 1 Gigabyte at a time
+  bufsize=n_rec*(baselines/stokes)*n_chan*group_size;
+  if (bufsize>max_bufsize || restart_rec>0){//process in chunks
+    n_rec1=floor((1.0*max_bufsize)/(1.0*bufsize)*n_rec);
+    bufsize=n_rec1*(baselines/stokes)*n_chan*group_size;
+    rec0=*restart_rec;  rec1=rec0+n_rec1;
+    if(rec1>=n_rec){rec1=n_rec;*restart_rec=0;}//last chunk in file
+    else{*restart_rec=rec1;}//start of next chunk
+  }else {rec0=0;rec1=n_rec;}// process file in one chunk
+
+  obuf=(*outbuf=(char*)malloc(bufsize));//mem returned to calling prog
   if(obuf==NULL) {fprintf(stderr,"Malloc Error\n");return -1;}
+  //get the time for the first record of this chunk
+  n_slice=floor((start_rec+rec0)/rec_per_slice);
+  off=n_slice*sizeof(struct timeval)+n_slice*rec_per_slice*recl;
+  if((fseek(fp,off,SEEK_SET)<0)||fread(&tv,timesize,1,fp)!=1){
+    fprintf(stderr,"Error reading timestamp from %s\n",rfile->fname[idx]);
+    fclose(fp);
+    return -1;
+  }
+  unix_time=tv.tv_sec;
+  //middle of record
+  tm=unix_time_to_ist(unix_time,tv.tv_usec/1.0e6)+user->timestamp_off;
+  tm+=(start_rec+rec0-rec_per_slice*n_slice)*integ;//start time of rec0
+  tm+=idx*rec_per_slice*integ;// timeval is start only for file[0]!
   if(user->do_log)
-    fprintf(lfp,"File %d  Copy Records %d - %d\n",idx,start_rec,
-	    start_rec+n_rec);
+    fprintf(lfp,"File %d  CopyStart=%12.6f Copy Rec %d - %d [Chunk %d - %d]\n",
+	    idx,tm,start_rec,start_rec+n_rec,rec0,rec1);
 
   // convert selected data into random groups
-  off=start_rec*recl;fseek(fp,off,SEEK_SET);
-  for(copied=0,r=0;r<n_rec;r++){
-    if(fread(rbuf,recl,1,fp)!=recl)
-      {fprintf(stderr,"Error reading %s\n",rfile->fname[idx]); return -1;}
-    tv=(struct timeval*)rbuf;
-    tm=tv->tv_sec+tv->tv_usec/1.0e6+user->timestamp_off;//middle of record
+  off=n_slice*timesize+(start_rec+rec0)*recl;//start point of this chunk
+  if(fseek(fp,off,SEEK_SET)<0){
+    fprintf(user->lfp,"No data selected from File %s\n",rfile->fname[idx]);
+    fclose(fp);
+    return -1;
+  }
+  for(copied=0,r=rec0;r<rec1;r++){
+    if((start_rec+r)%rec_per_slice ==0){//start of new slice, get timeval
+      if(fread(&tv,timesize,1,fp)!=1)
+	{fprintf(stderr,"Reached EoF for %s\n",rfile->fname[idx]);return -1;}
+      unix_time=tv.tv_sec;
+      tm=unix_time_to_ist(unix_time,tv.tv_usec/1.0e6)+user->timestamp_off;
+      tm+=idx*rec_per_slice*integ;// timeval is start only for file[0]!
+    }else{ tm+=integ;}
+    if(fread(rbuf,recl,1,fp)!=1) //get the data
+      {fprintf(user->lfp,"Reached EoF %s\n",rfile->fname[idx]); return 0;}
     get_chan_num(tm,burst,corr,scan,&c0,&c1);
     if(user->do_log>10)
       fprintf(lfp,"File %d Rec %d Slice %d Lta %d Time %12.6f Chans %d - %d\n",
@@ -986,10 +1072,12 @@ int copy_sel_chans(SvSelectionType *user, int idx, char **outbuf){
 	uvwpar=(UvwParType*)(obuf+off);//uvw for this group
 	out=(Cmplx3Type*)(obuf+off+sizeof(UvwParType));//data for this group
 	for(b1=b;b1<b+vispar->vis_sets;b1++){
-	  in=(_Float16*)(rbuf+vinfo[b1].off)+2*c;//input data for this chan
-	  out->r=(float)in[0]; out->i=(float)in[1];
+	  //input data for this chan
+	  in=(unsigned short*)(rbuf+vinfo[b1].off)+2*c;
+	  out->r=half_to_float(in[0]); out->i=half_to_float(in[1]);
+	  out->wt=1.0;
 	  if(visinfo[b1].flip)out->i=-out->i;
-	  if(visinfo[b1].drop)out->wt=-1.0;else out->wt=1.0;
+	  if(visinfo[b1].drop)out->wt=-1.0;
 	  out++;//now copy same chan for next stokes
 	 }
 	// scale uv co-ordinates so that the values come out right inside of
@@ -1008,7 +1096,10 @@ int copy_sel_chans(SvSelectionType *user, int idx, char **outbuf){
 	prenut(uvwpar,corr->daspar.mjd_ref,source->ra_app,source->dec_app,
 	       epoch1);
 	uvwpar->date1 = date1 ;
-	uvwpar->date2 = date2 ;
+	//offset date2 to allow for plotting of the visibility data. The date
+	//parameter here is in any case not appropriate for for imaging. Only
+	//the u,v,w parameters are correct.
+	uvwpar->date2 = date2+(c*integ)/channels ;
 	uvwpar->baseline = ant0*256 + ant1 + 257 ;
 	uvwpar->su = 1; // only one source in file
 	uvwpar->fq = 1 ; // only one frequency id in file
@@ -1031,6 +1122,10 @@ int copy_sel_chans(SvSelectionType *user, int idx, char **outbuf){
   rbuf has enough space allocated.
   
   jnc mar 25
+
+  jnc apr 25 corrected the record structure to not include a timestamp.
+             (timestamp is present only once for every recs_per_slice
+	     records and is read separately).
 */
 int simulate_visibilities(SvSelectionType *user, double tm, char *rbuf,
 			  int c0,int c1){
@@ -1049,7 +1144,7 @@ int simulate_visibilities(SvSelectionType *user, double tm, char *rbuf,
   unsigned long    off;
   BaseUvwType      uvw[MAX_ANTS];
   float            freq,u,v,w,l,m,n,re,im,dec,dec0,d_alpha;
-  _Float16        *vis;
+  unsigned short  *vis;
 
   
   if (baselines < 1)
@@ -1092,10 +1187,10 @@ int simulate_visibilities(SvSelectionType *user, double tm, char *rbuf,
       re=cos(2.0*M_PI*(u*l+v*m+w*n));
       im=sin(2.0*M_PI*(u*l+v*m+w*n));
       // offset to this channel
-      off=sizeof(struct timeval)+(b*channels+c)*sizeof(float); 
-      vis=(_Float16*)(rbuf+off);
-      vis[0]=(_Float16)re;
-      vis[1]=(_Float16)im;
+      off=(b*channels+c)*sizeof(float); 
+      vis=(unsigned short*)(rbuf+off);
+      vis[0]=float_to_half(re);
+      vis[1]=float_to_half(im);
     }
   }
 
@@ -1107,7 +1202,8 @@ int simulate_visibilities(SvSelectionType *user, double tm, char *rbuf,
   
   jnc mar 25
 */
-int fake_sel_chans(SvSelectionType *user, int idx, char **outbuf){
+int fake_sel_chans(SvSelectionType *user, int idx, char **outbuf,
+		   int *restart_rec){
   UvwParType      *uvwpar;
   RecFileParType  *rfile=&user->recfile;
   CorrType        *corr=user->corr;
@@ -1118,20 +1214,20 @@ int fake_sel_chans(SvSelectionType *user, int idx, char **outbuf){
   double           df=source->ch_width*source->net_sign[0];//signed
   VisParType      *vispar=&user->vispar;
   VisInfoType     *visinfo=vispar->visinfo;
-  int              channels=user->channels;
-  int              baselines=user->baselines;
+  int              channels=corr->daspar.channels;//input channels
+  int              baselines=user->baselines;//output baselines
   int              stokes=user->stokes;
   double           epoch,epoch1=user->epoch;
   int              recl,group_size,start_rec,n_rec,n_chan,copied;
   int              r,b,b1,i,date1,c,c0,c1,in_stride;
+  int              rec0,rec1,n_rec1;
   double           tm,tm_m,JD,date2,freq,noise;
   double           integ=corr->daspar.lta*corr->corrpar.statime;
-  unsigned long    off;
+  unsigned long    off,bufsize,max_bufsize;
   BaseUvwType      uvw[MAX_ANTS];
   char            *rbuf,*obuf;
-  _Float16        *in;
+  unsigned short        *in;
   Cmplx3Type      *out;
-  struct timeval  *tv;
   FILE            *lfp=user->lfp;
   
   if (baselines < 1)
@@ -1151,8 +1247,7 @@ int fake_sel_chans(SvSelectionType *user, int idx, char **outbuf){
     return -1;
   }
   // allocate memory for read
-  recl=sizeof(struct timeval)+corr->daspar.baselines*corr->daspar.channels
-    *sizeof(float);
+  recl=corr->daspar.baselines*corr->daspar.channels*sizeof(float);
   if((rbuf=malloc(recl))==NULL){fprintf(stderr,"Malloc Error!\n");return -1;}
   
   // get recnums without actuall reading the data (last arg is 1 for fakedata)
@@ -1161,14 +1256,31 @@ int fake_sel_chans(SvSelectionType *user, int idx, char **outbuf){
   n_chan=(int)rint(1.1*get_nchan(burst,corr,scan)); 
   // each random group contains data for all stokes and one channel
   group_size=sizeof(UvwParType)+sizeof(Cmplx3Type)*stokes;
+  max_bufsize=1024*1024*1024;// copy a maximum of a Gigabyte at a time
+  bufsize=n_rec*(baselines/stokes)*n_chan*group_size;
+  if (bufsize>max_bufsize || restart_rec>0){//process in chunks
+    n_rec1=floor((1.0*max_bufsize)/(1.0*bufsize)*n_rec);
+    bufsize=n_rec*(baselines/stokes)*n_chan*group_size;
+    rec0=*restart_rec;
+    rec1=rec0+n_rec1;
+    if(rec1>=n_rec){
+      rec1=n_rec;// last chunk of file
+      *restart_rec=0;
+    }else{
+      *restart_rec=rec1;//start point for next chunk to copy
+    }
+  }else{
+    rec0=0;
+    rec1=n_rec;
+  }
   *outbuf=(char*)malloc(n_rec*(baselines/stokes)*n_chan*group_size);
   obuf=*outbuf;
   if(obuf==NULL) {fprintf(stderr,"Malloc Error\n");return -1;}
   if(user->do_log)
-    fprintf(lfp,"File %d  Copy Records %d - %d\n",idx,start_rec,start_rec+n_rec);
-
+    fprintf(lfp,"File %d  Copy Records %d - %d [chunk: %d-%d]\n",
+	    idx,start_rec,start_rec+n_rec,start_rec+rec0,start_rec+rec1);
   tm=rfile->b_start[idx];
-  for(copied=0,r=0;r<n_rec;r++){
+  for(copied=0,r=rec0;r<rec1;r++){
     get_chan_num(tm,burst,corr,scan,&c0,&c1);
     if(user->do_log>10)
       fprintf(lfp,"File %d Rec %d Slice %d Lta %d Time %12.6f Copy Chans %d - %d\n",idx,start_rec+r,(start_rec+r)/50, (start_rec+r)%50, tm,c0,c1);
@@ -1194,8 +1306,9 @@ int fake_sel_chans(SvSelectionType *user, int idx, char **outbuf){
 	out=(Cmplx3Type*)(obuf+off+sizeof(UvwParType));//data for this group
 	for(b1=b;b1<b+vispar->vis_sets;b1++){
 	  //input data for this chan
-	  in=(_Float16*)(rbuf+vinfo[b1].off+c*sizeof(float));
-	  out->r=(float)in[0]; out->i=(float)in[1];
+	  in=(unsigned short*)(rbuf+vinfo[b1].off)+2*c;
+	  out->r=half_to_float(in[0]);
+	  out->i=half_to_float(in[1]);
 	  noise=drand48()-0.5;out->r +=0.1*noise;
 	  noise=drand48()-0.5;out->i +=0.1*noise;
 	  if(visinfo[b1].flip)out->i=-out->i;
@@ -1293,5 +1406,249 @@ int clip(char *visbuf, SvSelectionType *user, int groups){
 
   return flagged;
 }
+/*
+  function to compute the bandpass. In detail, it returns in the user->bpass
+  structure:(1) the average (over all records in the slice - rbuf is expected to
+  point to a buffer holding all the records in a given slice) of the real
+  and imaginary part separately for each channel of each baselines selected
+  for output. This average (arithmentic mean) can be subtracted from each
+  visibility - the idea being that this would get rid of some RFI at least.
+  (Also gets rid of some signal - but the intention is that when do something
+  similar for the burst (in another as yet [13/apr/25] to be written function)
+  we will exclude visibilities with signal from the average. (2) the average
+  bandpass amplitude. It is ensured that the average amplitude bandpass has
+  some sensible value in it, even if some channels have no data. The amplitude
+  bandpass is normalized using the median value across all channels.
 
+  This particular function is mainly meant for debugging use, for e.g. to check
+  that the calibration is working properly, etc.
 
+  jnc apr 2025
+*/
+  
+int make_bpass(SvSelectionType *user, char *rbuf){
+  int              rec_per_slice=user->recfile.rec_per_slice;
+  CorrType        *corr=user->corr;
+  VisParType      *vispar=&user->vispar;
+  VisInfoType     *visinfo=vispar->visinfo;
+  BpassType       *bpass=&user->bpass;
+  int              channels=corr->daspar.channels;//input channels
+  int              baselines=user->baselines;//output baselines
+  int              stokes=user->stokes;
+  unsigned long    off,recl;
+  int              r,n,b,c;
+  unsigned short  *in;
+  Cmplx3Type      *mean;
+  float            re,im,median,mad,*amp;
+
+  // allocate memory for the mean over records as well as the normalized
+  // amplitude. Calling program should free memory when done
+  for(b=0;b<baselines;b++){
+    if((bpass->mean[b]=(Cmplx3Type*)malloc(channels*sizeof(Cmplx3Type)))==NULL)
+      {fprintf(stderr,"Malloc error in make_bpass\n"); return -1;}
+    if((bpass->abp[b]=(float*)malloc(channels*sizeof(float)))==NULL)
+      {fprintf(stderr,"Malloc error in make_bpass\n"); return -1;}
+  }
+
+  // compute the mean, normalized amplitude bandpass for selected channels
+  for(b=0;b<baselines;b++){
+    mean=bpass->mean[b];
+    for(c=0;c<channels;c++){
+      mean[c].r=mean[c].i=0.0;
+      for(n=0,r=0;r<rec_per_slice;r++){
+	off=r*recl+visinfo[b].off;
+	in=(unsigned short*)(rbuf+off)+2*c;
+	re=half_to_float(in[0]);
+	im=half_to_float(in[1]);
+	if(isfinite(re) && isfinite(im))
+	  {mean[c].r+=re; mean[c].i+=im;n++;}
+      }
+      if(n>0)
+	{mean[c].r=mean[c].r/n;mean[c].i=mean[c].i/n;mean[c].wt=1.0;}
+      else mean[c].wt=-1;
+    }
+    amp=bpass->abp[b];
+    for(c=0;c<channels;c++)
+      if(mean[c].wt>0)
+	amp[c]=sqrt(mean[c].r*mean[c].r+mean[c].i*mean[c].i);
+      else
+	amp[c]=-1.0;
+    //interpolate over flagged channels
+    if(amp[0]<0.0){
+      for(c=1;c<channels;c++)
+	if(amp[c]>0.0)
+	  {amp[0]=amp[c];break;}
+    }
+    for(c=1;c<channels;c++)
+      if(amp[c]<0.0)amp[c]=amp[c-1];
+    if(amp[0]<0.0)
+      {fprintf(stderr,"All channels flagged, cannot normalize!\n"); return -1;}
+    robust_stats(channels,amp,&median,&mad);
+    for(c=0;c<channels;c++)
+      amp[c]=amp[c]/median;
+  }
+  return 0;
+}
+/*
+  function to copy all channels in a given slice. This then creates a "normal"
+  UV file, i.e. there is no scaling of UV coordinates etc. Mainly for debugging
+  use, i.e. for e.g. for checking that the bandpass calibration is working,
+  etc.
+
+  jnc apr 2025
+*/
+int copy_all_chans(SvSelectionType *user, int idx, char **outbuf,
+		   int restart_slice){
+  UvwParType      *uvwpar;
+  RecFileParType  *rfile=&user->recfile;
+  int              n_slice,rec_per_slice=rfile->rec_per_slice;
+  double           slice_interval=rfile->slice_interval;
+  CorrType        *corr=user->corr;
+  ScanInfoType    *scan=user->srec->scan;
+  SourceParType   *source=&scan->source;
+  double           freq0=source->freq[0];
+  double           df=source->ch_width*source->net_sign[0];//signed
+  VisParType      *vispar=&user->vispar;
+  VisInfoType     *visinfo=vispar->visinfo;
+  int              channels=corr->daspar.channels;//input channels
+  int              baselines=user->baselines;//output baselines
+  int              stokes=user->stokes;
+  double           epoch,epoch1=user->epoch;
+  int              group_size,start_rec,n_rec,copied;
+  int              rec0,rec1,n_rec1;
+  int              r,b,b1,i,date1,c;
+  double           tm,JD,date2,freq;
+  double           integ=corr->daspar.lta*corr->corrpar.statime;
+  unsigned long    off,bufsize,max_bufsize,recl,timesize=sizeof(struct timeval);
+  BaseUvwType      uvw[MAX_ANTS];
+  char            *rbuf,*obuf;
+  unsigned short  *in;
+  Cmplx3Type      *out,*mean,*mean0;
+  float           *abp,*abp0;
+  struct timeval   tv;
+  FILE            *lfp=user->lfp,*fp;
+  char             fname[LINELEN+PATHLEN+1];
+  time_t           unix_time;
+  
+  if (baselines < 1)
+    {fprintf(stderr,"Illegal Nbaselines %d\n",baselines); return -1 ;}
+  if ((stokes != 1) && (stokes != 2) &&(stokes !=4))
+    {fprintf(stderr,"Illegal Nstokes %d (Legal 1/2/4)\n",stokes);return -1;}
+  if(idx<0 || idx>rfile->nfiles){
+    fprintf(stderr,"Illegal raw file number %d [legal %d - %d]\n",
+	    idx,0,rfile->nfiles);
+    return -1;
+  }
+  strcpy(fname,"");
+  if(rfile->path !=NULL){strcpy(fname,rfile->path);strcat(fname,"/");}
+  strcat(fname,rfile->fname[idx]);
+  fname[strcspn(fname,"\n")]='\0';//remove trailing newline,if any
+  if((fp=fopen(fname,"rb"))==NULL){
+    fprintf(stderr,"Unable to open %s\n",fname); return -1;}
+
+  for (i=0; i<MAX_ANTS; i++)
+  { uvw[i].bx = user->corr->antenna[i].bx ;
+    uvw[i].by = user->corr->antenna[i].by ;
+    uvw[i].bz = user->corr->antenna[i].bz ;
+  }
+
+  // allocate memory for read (timeval comes only once every rec_per_slice
+  // records and is read separately
+  recl=corr->daspar.baselines*channels*sizeof(float);
+  if((rbuf=malloc(rec_per_slice*recl))==NULL){
+    fprintf(stderr,"Malloc Error allocated %ld bytes!\n",rec_per_slice*recl);
+      return -1;
+  }
+  group_size=sizeof(UvwParType)+sizeof(Cmplx3Type)*stokes*channels;
+  bufsize=rec_per_slice*(baselines/stokes)*group_size;
+  obuf=(*outbuf=(char*)malloc(bufsize));//mem returned to calling prog
+  if(obuf==NULL) 
+    {fprintf(stderr,"Malloc Error allocating %ld bytes\n",bufsize);return -1;}
+  //get the time for the first record of this chunk
+  off=restart_slice*sizeof(struct timeval)+restart_slice*rec_per_slice*recl;
+  if((fseek(fp,off,SEEK_SET)<0)||fread(&tv,timesize,1,fp)!=1){
+    fprintf(stderr,"Error reading timestamp from %s\n",rfile->fname[idx]);
+    fclose(fp);
+    return -1;
+  }
+  unix_time=tv.tv_sec;
+  //middle of record
+  tm=unix_time_to_ist(unix_time,tv.tv_usec/1.0e6)+user->timestamp_off;
+  tm+=idx*rec_per_slice*integ;// timeval is start only for file[0]!
+  if(user->do_log)
+    fprintf(lfp,"File %d  CopyStart=%12.6f Copy Rec %d - %d [Chunk %d - %d]\n",
+	    idx,tm,start_rec,start_rec+n_rec,rec0,rec1);
+  if(fread(rbuf,recl,rec_per_slice,fp)!=rec_per_slice) //get the data
+    {fprintf(user->lfp,"Reached EoF %s\n",rfile->fname[idx]); return 0;}
+  if(user->do_band)    //compute the bandpass
+    {if(make_bpass(user,rbuf)) return -1;}
+  else{// calibration arrays that won't affect data values
+    if((mean0=(Cmplx3Type*)malloc(channels*sizeof(Cmplx3Type)))==NULL)
+      {fprintf(stderr,"Malloc error\n");return -1;}
+    if((abp0=(float*)malloc(channels*sizeof(float)))==NULL)
+      {fprintf(stderr,"Malloc error\n");return -1;}
+    for(c=0;c<channels;c++)
+      {mean0[c].r=mean0[c].i=0.0;abp0[c]=mean0[c].wt=1.0;}
+  }
+	    
+  // convert selected data into random groups
+  for(copied=0,r=0;r<rec_per_slice;r++){
+    svgetUvw(tm,corr->daspar.mjd_ref,source,uvw);
+    JD = corr->daspar.mjd_ref + 2400000.5 + tm/86400 ;
+    date1 = (int) JD ;
+    date2 = JD - date1+user->iatutc/86400 ; //CHECK IATUTC
+    for(b=0;b<baselines;b+=vispar->vis_sets){//vis_sets==2
+      VisInfoType *vinfo=vispar->visinfo;
+      int ant0=vinfo[b].ant0,ant1=vinfo[b].ant1; //same for all base in set
+      off=copied*group_size;
+      uvwpar=(UvwParType*)(obuf+off);//uvw for this group
+      out=(Cmplx3Type*)(obuf+off+sizeof(UvwParType));//data for this group
+      for(b1=b;b1<b+vispar->vis_sets;b1++){
+	off=r*recl+vinfo[b1].off;
+	if(user->do_band){//actual calibration
+	  mean=user->bpass.mean[b1]; abp=user->bpass.abp[b1];
+	}else{ mean=mean0; abp=abp0;}//dummy values
+	in=(unsigned short*)(rbuf+off);
+	for(c=0;c<channels;c++){ 
+	  //input data for this chan
+	  out->r=half_to_float(in[2*c]);
+	  out->i=half_to_float(in[2*c+1]);
+	  out->r=(out->r-mean[c].r)/abp[c];
+	  out->i=(out->i-mean[c].i)/abp[c];
+	  out->wt=1.0;
+	  if(visinfo[b1].flip)out->i=-out->i;
+	  if(visinfo[b1].drop)out->wt=-1.0;
+	  if(!(isfinite(out->r) &&isfinite(out->i)))
+	    out->wt=-1.0;
+	  out++;//now copy same chan for next stokes
+	}
+      }
+      uvwpar->u = (uvw[ant1].u-uvw[ant0].u);
+      uvwpar->v = (uvw[ant1].v-uvw[ant0].v);
+      uvwpar->w = (uvw[ant1].w-uvw[ant0].w);
+      epoch=2000.0 + (corr->daspar.mjd_ref - 51544.5)/365.25 ;
+      //rotate from date (epoch) coordinates to standard (epoch1==J2000 by
+      //default)
+      if(epoch1<0.0)epoch1=epoch;
+      prenut(uvwpar,corr->daspar.mjd_ref,source->ra_app,source->dec_app,
+	     epoch1);
+      uvwpar->date1 = date1 ;
+      uvwpar->date2 = date2 ;
+      uvwpar->baseline = ant0*256 + ant1 + 257 ;
+      uvwpar->su = 1; // only one source in file
+      uvwpar->fq = 1 ; // only one frequency id in file
+      copied++;
+      tm=tm+integ;
+    }
+  }
+
+  free(rbuf); // free the read buf; obuf will be freed by calling program
+  fclose(fp);
+  if(user->do_band){
+    for(b=0;b<baselines;b++)
+      {free(user->bpass.mean[b]); free(user->bpass.abp[b]);}
+  }else{
+    free(mean0); free(abp0);
+  }
+  return copied; // total number of visibility records 
+}
