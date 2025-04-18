@@ -12,6 +12,7 @@
 #define ARCH_64BIT  
 #define PATHLEN 256
 #define LINELEN  80
+#define MAX_REC_PER_SLICE 50  // records in a given slice
 
 typedef struct { float r, i ; } Complex ;
 typedef struct { float r, i, wt ; } Cmplx3Type ;
@@ -105,8 +106,11 @@ typedef struct burst_par_type{
 } BurstParType;
 
 typedef struct bpass_type{
-  Cmplx3Type *mean[MAX_BASE];// mean of re,im over the slice
-  float      *abp[MAX_BASE]; // normalized amplitude of the bandpass
+  int         file_idx,slice;   // file index and slice of this data
+  float      *abp[MAX_BASE];    // normalized amplitude of the "bandpass"
+  Complex    *off_src[MAX_BASE];// mean of re,im over off source region
+  short       start_chan[MAX_REC_PER_SLICE];// per rec start channel of burst
+  short       end_chan[MAX_REC_PER_SLICE];  // per rec end channel of signal 
 }BpassType;
 typedef struct sv_selection_type
 { int              scans, baselines , antennas ;
@@ -124,7 +128,7 @@ typedef struct sv_selection_type
   CorrType        *corr ;
   ScanRecType     *srec ;
   int              do_log;
-  FILE            *lfp;
+  FILE            *lfp,*pcfp;
   RecFileParType   recfile;  
   BurstParType     burst;
   int              update_burst; //compute burst params (see update_burst())
@@ -132,6 +136,7 @@ typedef struct sv_selection_type
   float            thresh; // threshold for flagging (units of mad)
   int              all_chan;//ignore BurstPar and copy all chans (debug use)
   int              do_band;// apply amplitude bandpass calibration
+  int              postcorr;//generate postcorr beam output
 
 } SvSelectionType ;
 
@@ -199,15 +204,22 @@ typedef struct
   float *rbuf,*ibuf, *xbuf, *parbuf ;
 } FitBufType ;
 
-int copy_all_chans(SvSelectionType *user, int idx, char **outbuf, int restart);
-int     copy_sel_chans(SvSelectionType *user, int idx, char **buf,int *restart);
-int     clip(char *visbuf, SvSelectionType *user, int groups);
+typedef unsigned short ushort;
+
+int     copy_vis(SvSelectionType *user, int idx, int slice,
+		   int start_rec, int n_rec,char *rbuf,char **outbuf);
+int     clip(char *visbuf, SvSelectionType *user, int idx, int slice,
+	     int groups);
 int     fake_sel_chans(SvSelectionType *user, int idx, char **buf,int *restart);
-unsigned short  float_to_half(const float x);
+ushort  float_to_half(const float x);
+int     get_rec_num(SvSelectionType *user,int idx, double start_time,
+		    int *start_rec, int *n_rec);
+double  get_slice_time(SvSelectionType *user,int idx,int slice);
 float   half_to_float(const unsigned short x);
 int     init_user(SvSelectionType *user, char *fname, char *fname1);
 double  lmst(double mjd);
 char   *mjd2iau_date(double mjd);
+int     read_slice(SvSelectionType *user, int idx, int slice, char *rbuf);
 float   svVersion(void);
 void    swap_bytes(unsigned short *, int) ;
 void    swap_short(unsigned *, int) ;

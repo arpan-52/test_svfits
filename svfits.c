@@ -38,6 +38,25 @@
   are the two parameters expected from the SPOTLIGHT pipeline).
 
   jnc apr 2025
+
+  major clean up of the code, the major difference is that it now processes
+  a "slice" (i.e. the 50 continuguous records in any given raw visibilty file)
+  at a time. This makes is more straightforward to do amplitude bandpass
+  calibration, subtract RFI etc. It also helps make the code much more modular,
+  allowing for multiple operations to be done on the slice once the slice has
+  been read into memory.
+  
+  An option to produce a post-correlation beam (currently at the phase centre,
+  in a later version the plan is to rotate it to the centre of the realtime
+  beam in which the burst was located) has also been added, along with various
+  other options. It is easiest to look at the associated sv_par.fits file to
+  understand the options. The log file has also been reformatted to make it
+  easier for e.g. to overplot the data actually selected for the burst on top
+  of the post_correlation beam data produced by this program. Currently it is
+  a little slow, it would probably be good to parallelize some of the visibility
+  handling.
+
+  jnc apr 2025
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -579,19 +598,24 @@ void set_coordtype(SvSelectionType *user)
  return;
 
 }
-int main (int argc, char **argv)
+int main(int argc, char **argv)
 { int             k,status=0,pcount=8,groups,flagged,idx,group_size;
   int             sources=1,frequencies=1; // for SU and FQ tables
   float           version;
   long            gcount;
   fitsfile       *fptr;
-  char            outfile[64] ;
+  char            outfile[LINELEN] ;
   char           *visbuf;
   SvSelectionType user;
-  InitHdrType    *hdr;
+  BpassType      *bpass=&user.bpass;
   RecFileParType *rfile=&user.recfile;
+  int             baselines,channels;
+  InitHdrType    *hdr;
   SourceParType  *source;
-  int             c,restart_rec;
+  int             b,c,slice,rec,start_rec,n_rec,rec_per_slice;
+  unsigned long   recl,bufsize;
+  char           *rbuf;
+  double          start_time;
   char            antfile[NAMELEN],uparfile[NAMELEN];
   extern char    *optarg;
   extern int      optind,opterr;
@@ -643,37 +667,57 @@ int main (int argc, char **argv)
     return -1 ;
   }
 
-  // read visibilties from raw files, write out randon groups to FITS FILE
+  // allocate space for raw visibilities (one full timeslice is processed
+  // at a time). Space for the output random groups is allocated inside the
+  // copy_* functions
+  recl=user.corr->daspar.channels*user.corr->daspar.baselines*sizeof(float);
+  rec_per_slice=rfile->rec_per_slice;
+  bufsize=rec_per_slice*recl;
+  if((rbuf=malloc(bufsize))==NULL){
+    fprintf(stderr,"Malloc error for %ld bytes\n",bufsize);
+    return -1;
+  }
+
+  // allocate memory for the mean spectrum and the amplitude bandpass
+  channels=user.corr->daspar.channels; //input channels
+  baselines=user.baselines;//output baselines
+  for(b=0;b<baselines;b++){
+    if((bpass->off_src[b]=(Complex*)malloc(channels*sizeof(Complex)))==NULL)
+      {fprintf(stderr,"Malloc error in make_bpass\n"); return -1;}
+    if((bpass->abp[b]=(float*)malloc(channels*sizeof(float)))==NULL)
+      {fprintf(stderr,"Malloc error in make_bpass\n"); return -1;}
+  }
+
+  // read visibilties from raw files, write out random groups to FITS FILE
+  // loop over files and slices, and process one full slice at a time.
   gcount=1;//FITS numbering starts from 1
   group_size=user.channels*user.stokes*sizeof(Cmplx3Type)+sizeof(UvwParType);
-  restart_rec=0;
   for(idx=0;idx<rfile->nfiles;idx++){
-    if(user.fake_data){ // for debugging without having to read visibilities
-      if((groups=fake_sel_chans(&user,idx,&visbuf,&restart_rec))<0)
-      {fprintf(stderr,"Error processing %s\n",rfile->fname[idx]);return -1;}
-    }else{
-      if(user.all_chan){// copy all channels
-	if((groups=copy_all_chans(&user,idx,&visbuf,0))<0)
-	  {fprintf(stderr,"Error processing %s\n",rfile->fname[idx]);return -1;}
-      }else{
-	if((groups=copy_sel_chans(&user,idx,&visbuf,&restart_rec))<0)
-	  {fprintf(stderr,"Error processing %s\n",rfile->fname[idx]);return -1;}
+    if((start_time=get_slice_time(&user,idx,0))<0) return -1;
+    if(!user.all_chan)//helpful for debug- could later copy only selected recs
+      get_rec_num(&user,idx,start_time,&start_rec,&n_rec);
+    else{start_rec=0;n_rec=rec_per_slice;}// copy all data in 1st slice
+    if(n_rec==0) continue; // file has no burst data
+    for(rec=start_rec;rec<start_rec+n_rec;rec+=rec_per_slice){//loop over slice
+      slice=rec/rec_per_slice;
+      if(!user.fake_data)
+	if(read_slice(&user,idx,slice,rbuf)) return -1;
+      if((groups=copy_vis(&user,idx,slice,start_rec,n_rec,rbuf,&visbuf))<0)
+	{fprintf(stderr,"Error processing %s\n",rfile->fname[idx]);return -1;}
+      if(!user.all_chan && user.do_flag){//flagging all chans is too expensive
+	if((flagged=clip(visbuf,&user,idx,slice,groups))<0)return -1;
+	fprintf(user.lfp,"File: %d Slice:%d  Flagged %d of %d visibilities\n",
+		idx,slice,flagged,groups);
       }
+      k =  groups*group_size;
+      if (user.corr->endian & LittleEndian) swap_long(visbuf, k/sizeof(float)) ;
+      ffptbb(fptr,gcount,1,(long)k,(unsigned char *)visbuf,&status) ; 
+      if (status){printerror (status);break;}
+      fprintf(stderr,"File %d Slice %d wrote %12.4e MBytes\n",idx,slice,
+	      (1.0*k)/1.0e6);
+      gcount += groups;
+      free(visbuf); // allocated inside the copy_* functions
     }
-    if(user.do_flag){
-      if((flagged=clip(visbuf,&user,groups))<0)return -1;
-      fprintf(user.lfp,"File %d : Flagged %d of %d visibilities\n",idx,flagged,
-	      groups);
-    }
-    k =  groups*group_size;
-    if (user.corr->endian & LittleEndian) swap_long(visbuf, k/sizeof(float)) ;
-    ffptbb(fptr,gcount,1,(long)k,(unsigned char *)visbuf,
-	   &status) ; 
-    if (status){printerror (status);break;}
-    fprintf(stderr,"File %d wrote %12.4e MBytes\n",idx,(1.0*k)/1.0e6);
-    gcount += groups;
-    free(visbuf);
-    if(restart_rec>0)idx--; //copy next chunk from the same file
   }
   gcount--; // total number of groups written
   if(ffukyj(fptr,"GCOUNT",gcount," ",&status)) return printerror(status);
@@ -690,6 +734,12 @@ int main (int argc, char **argv)
   if(ffclos(fptr,&status)) printerror( status );
   
   free(user.hdr) ;
+  free(rbuf);
+  for(b=0;b<baselines;b++){
+      free(bpass->off_src[b]);
+      free(bpass->abp[b]);
+  }
+
   fprintf(stdout,"Created %s\n",user.fitsfile);
   fprintf(stdout,"See svfits.log for details\n");
   return 0 ;

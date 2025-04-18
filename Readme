@@ -1,33 +1,42 @@
-JNC 30 March 2025
+JNC 18 Apr 2025
 
-Updated code with a slightly more detailed simulation for testing. A point source is inserted so that one can check in the image whether it appears in the correct location or not (see simulate_visibilities() in svsubs.c for more details). Seems to be working correctly.
+Updated code which now seems to be working correctly, provided the correct burst
+time is given. (The provided burst time appeared to be wrong, so for testing,
+the burst time estimated directly from the 1.3ms raw visibility files was used).
+The FITS file loads properly, can be imaged, self-calibrated etc. Code has also
+been made a lot cleaner, and documentation added. There is now the option for
+make a post correlation beam using the raw visiblities themselves, which can be
+a useful diagnostic.
+
 
 Some details on the files in this commit are given below.
 
--- antsamp.hdr - No change
+antsamp.hdr - No change
 
--- fitsio.h  No change
+fitsio.h  No change
 
--- longnam.h No Change
+longnam.h No Change
 
--- makefile No change
+makefile No change
 
---newcorr.h No change
+newcorr.h No change
+
+plot_flagged.py  python function to show the number of visibilities flagged per baseline
+
+plot_postcorr.py python function to plot the post correlation beam data computed by svfits. The data selected as containing the burst can also be read from the svfits.log file and overplotted.
 
 Readme -- this file.
 
-read_rawvis.py   A python program to read the raw 1.3ms visibility files, average together the data in multiple user selected ways, generate plots, overplot the channel selection done by svfits.c etc. Mainly for debugging use.
+read_rawvis.py no change
 
 stats.c -- No change
 
-svfits.c -- Added the option to process each raw visibility file in chunks, so
-as to reduce the memory requirement. This may not really be needed, and may be removed later to keep the code from getting unneccessarily complex. Also added the option to produce a regular multi-channel UV FITS file by copying all channels. This is helpful maily for debugging. In this mode added the options to do amplitude bandpass calibration as well as subtracting the mean visibility (computed over all records in the slice) from the data. Also added the options to update the burst parameters based on the burst MJD and burst intrinsic width - these are the two parameters expected to be provided by the SPOTLIGHT pipeline.
+svfits.c -- significant rewrite of the main function, where we now process the visibility files one slice (i.e. 50 continuous records) at a time. This has made it possible to have much more modular code. Also added several more options, including the option to make the post-correlation beam, which is a useful diagnostic. The python program plot_postcorr.py reads the generated beam data, along with the svfits log file, to show the post correlation beam as well as the data identified as containing the burst.
 
-svfits_par.txt -- added the parameters related to the added options in svfits.c, viz, to copy all channels, to update the burst data, do amplitude bandpass calibration
+svfits_par.txt -- added the parameters related to the added options in svfits.c.
 
-svio.h -- changes to accomodate the added options to svfits.
+svio.h -- changes to accommodate the added options to svfits.
 
-svsubs.c -- changes to update the burst parameters (see update_burst()), copy
-all channels (copy_all_chans), accept the frequency settings at one go, correct for the fact that the timeval is present only at the start of the slice, and that the timeval is the same for the same slice in all files, copy the data in chunks (see copy_sel_chans()), do amplitude bandpass calibration and subtract the mean over the slice (make_bpass()) etc.
+svsubs.c -- significant rewrite, to make the code much more modular. The main changes are that we now process one slice at a time, and there is also the option to compute the postcorrelation beam.
 
 utils.c -- No change
