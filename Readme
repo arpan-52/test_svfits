@@ -30,6 +30,6 @@ svfits_par.txt -- added the parameters related to the added options in svfits.c.
 
 svio.h -- changes to accommodate the added options to svfits.
 
-svsubs.c -- parallelized the more time consuming sections of the code, fixed some smaller bugs in normalizing the amplitude bandpass, added options to separate off_src subtraction and amplitude bandpass calibration.
+svsubs.c -- parallelized the more time consuming sections of the code, fixed some smaller bugs in normalizing the amplitude bandpass, added options to separate off_src subtraction and amplitude bandpass calibration. Updated version to 0.94
 
 utils.c -- No change

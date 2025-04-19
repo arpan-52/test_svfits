@@ -140,7 +140,7 @@ void prenut(UvwParType *uv,double mjd,double ra_app,double dec_app,
 #undef TINY
 
 float svVersion(void){//sets the version number for log and history
-  return 0.92;
+  return 0.94;
 }
 
 /*
