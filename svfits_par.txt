@@ -3,6 +3,11 @@
 * postcorrelation beam. The inputs here were tested with the PSR0329+54
 * data taken on 01/01/2025.
 *
+* 19/Apr/25 added options for separately doing bandpass correction and off
+* source subtraction (were combined into DO_BAND earlier) and also added
+* choice of number of threads for newly added parallel sections, option of
+* dropping CSQ baselines while making the post-corr beam
+*
 * I/O Files
 *
 NFILE          6 
@@ -44,6 +49,10 @@ UPDATE_BURST   1          ! update burst parms using only MJD, INT_WD and DM
 *DATA PROCESSING PARMS
 *
 DO_BAND         1         ! do amplitude bandpass calibration [0/1]
+DO_BASE         1         ! subtract baseline (i.e. mean off_src)  [0/1]
 DO_FLAG         1         ! do robust statsistics based flagging [0/1]
 THRESH         20         ! threshold for flagging
 POST_CORR       1         ! generate postcorrelation beam output [0/1]
+DROP_CSQ        0         ! drop CSQ baselines while making postcorr beam [0/1]
+NUM_THREADS    16         ! number of threads to use in parallel sections
+

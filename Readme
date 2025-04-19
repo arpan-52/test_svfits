@@ -1,13 +1,6 @@
-JNC 18 Apr 2025
+JNC 19 Apr 2025
 
-Updated code which now seems to be working correctly, provided the correct burst
-time is given. (The provided burst time appeared to be wrong, so for testing,
-the burst time estimated directly from the 1.3ms raw visibility files was used).
-The FITS file loads properly, can be imaged, self-calibrated etc. Code has also
-been made a lot cleaner, and documentation added. There is now the option for
-make a post correlation beam using the raw visiblities themselves, which can be
-a useful diagnostic.
-
+Added parallelization of the more time consuming parts of the code (make_postcorr and make_bpass) also fixed a bug in normalizing the amplitude bandpass in make_bpass. Separated out removing the off source baseline and applying the amplitude bandpass. Now the user can use either one or both or none.
 
 Some details on the files in this commit are given below.
 
@@ -21,9 +14,9 @@ makefile No change
 
 newcorr.h No change
 
-plot_flagged.py  python function to show the number of visibilities flagged per baseline
+plot_flagged.py  No change
 
-plot_postcorr.py python function to plot the post correlation beam data computed by svfits. The data selected as containing the burst can also be read from the svfits.log file and overplotted.
+plot_postcorr.py No change
 
 Readme -- this file.
 
@@ -31,12 +24,12 @@ read_rawvis.py no change
 
 stats.c -- No change
 
-svfits.c -- significant rewrite of the main function, where we now process the visibility files one slice (i.e. 50 continuous records) at a time. This has made it possible to have much more modular code. Also added several more options, including the option to make the post-correlation beam, which is a useful diagnostic. The python program plot_postcorr.py reads the generated beam data, along with the svfits log file, to show the post correlation beam as well as the data identified as containing the burst.
+svfits.c -- No change
 
 svfits_par.txt -- added the parameters related to the added options in svfits.c.
 
 svio.h -- changes to accommodate the added options to svfits.
 
-svsubs.c -- significant rewrite, to make the code much more modular. The main changes are that we now process one slice at a time, and there is also the option to compute the postcorrelation beam.
+svsubs.c -- parallelized the more time consuming sections of the code, fixed some smaller bugs in normalizing the amplitude bandpass, added options to separate off_src subtraction and amplitude bandpass calibration.
 
 utils.c -- No change

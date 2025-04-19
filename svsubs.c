@@ -4,6 +4,7 @@
 #include<string.h>
 #include<ctype.h>
 #include<time.h>
+#include<omp.h>
 
 #include"fitsio.h"
 #include "newcorr.h"
@@ -18,15 +19,15 @@ const char cont_char = '*', begin_char = '{', end_char = '}';
 enum {NFiles,Path,InputFile,FitsFile,AntMask,AllChan,IATUTC,Epoch,ObsMjd,
       FreqSet,CoordType,RaApp,DecApp,RaMean,DecMean,StokesType,BurstName,
       BurstMJD,BurstTime,BurstDT,BurstIntWd,BurstWd,BurstDM,BurstDDM,BurstFreq,
-      BurstBmId,BurstRa,BurstDec,UpdateBurst,DoFlag,Thresh,DoBand,PostCorr,
-      SvVars} SvVarType ;
+      BurstBmId,BurstRa,BurstDec,UpdateBurst,DoFlag,Thresh,DoBand,DoBase,
+      PostCorr,DropCsq,NumThreads,SvVars} SvVarType ;
 char *SvVarname[SvVars] =
   {"NFILE","PATH","INPUT","FITS","ANTMASK","ALL_CHAN","IATUTC","EPOCH",
    "OBS_MJD","FREQ_SET","COORD_TYPE","RA_APP","DEC_APP","RA_MEAN","DEC_MEAN",
    "STOKES_TYPE","BURST_NAME","BURST_MJD","BURST_TIME","BURST_DT","BURST_INTWD",
    "BURST_WIDTH","BURST_DM","BURST_DDM","BURST_FREQ","BURST_BM_ID",
    "BURST_RA","BURST_DEC","UPDATE_BURST","DO_FLAG","THRESH","DO_BAND",
-   "POST_CORR"};
+   "DO_BASE","POST_CORR","DROP_CSQ","NUM_THREADS"};
 static double K0=4.15e-3; // DM constant in seconds
 
 static float RefFreq,ChanWidth; // NEED TO SET THESE!!!
@@ -156,9 +157,12 @@ int svuserInp (char *filename, SvSelectionType *user ){
   SourceParType *source=&user->srec->scan->source;
   char           str[512],key_str[32] ;
   int            val[512];
-  FILE          *fp = fopen(filename, "rt") ;
+  FILE          *fp;
   int            var, np, k ;
- 
+
+  if((fp= fopen(filename, "rt")) ==NULL)
+    {fprintf(stderr,"Cannot open %s\n",filename); return -1;}
+  
   while ( fgets(str, 500, fp) )
   { char *p = str ;
     while (*p && (*p == ' '))p++ ;
@@ -226,7 +230,10 @@ int svuserInp (char *filename, SvSelectionType *user ){
       case DoFlag   :sscanf(p,"%d",&user->do_flag);break;
       case Thresh   :sscanf(p,"%f",&user->thresh);break;
       case DoBand   :sscanf(p,"%d",&user->do_band);break;
+      case DoBase   :sscanf(p,"%d",&user->do_base);break;
       case PostCorr :sscanf(p,"%d",&user->postcorr);break;
+      case DropCsq  :sscanf(p,"%d",&user->drop_csq);break;
+      case NumThreads:sscanf(p,"%d",&user->num_threads);break;
     }
   }
 
@@ -695,7 +702,10 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile){
   user->update_burst=1;//recompute parms with some as input (see update_burst())
   user->thresh=5.0;// threshold for MAD flagging
   user->do_band=0; // do not do amplitude bandpass
+  user->do_band=0; // do not subtract baseline (i.e. mean offsrc visibility)
   user->postcorr= 0;//generate a postcorrelation array output (debug use)
+  user->drop_csq= 1;//drop csq baselines while making postcorr beam
+  user->num_threads=16;//number of threads to use in parallel sections
   user->bpass.file_idx=-1;
   user->bpass.slice=-1;
   strcpy(user->fitsfile,"TEST.FITS") ;
@@ -764,7 +774,8 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile){
     if((user->pcfp=fopen("svfits_postcorr.dat","wb"))==NULL)
       { fprintf(stderr,"Cannot open svfits_postcorr.dat\n"); return -1;}
   }
-  
+  if(user->num_threads<0)
+    {fprintf(stderr,"Illegal NumThreads %d\n",user->num_threads); return -1;}
   return 0;
 }
 /*
@@ -1239,8 +1250,14 @@ int clip(char *visbuf, SvSelectionType *user, int idx, int slice, int groups){
   It is assumed that rbuf contails all of the data for the given file-index
   and slice.
 
-
   jnc apr 2025
+
+  added the option to allow the user to do just one of amplitude bandpass
+  (user->do_band True) or off source subtraction (user->do_base True) or
+  both (user->do_band True and user->do_base True). Also fixed a bug where
+  the bandpass normalization was not happening properly.
+
+  jnc 18apr25
 */
   
 int make_bpass(SvSelectionType *user, char *rbuf, int idx, int slice){
@@ -1284,7 +1301,7 @@ int make_bpass(SvSelectionType *user, char *rbuf, int idx, int slice){
     }
   }
 
-  if(user->fake_data || !user->do_band){// return nominal values
+  if(user->fake_data || !(user->do_band||user->do_base)){//fill nominal values
     for(b=0;b<baselines;b++){
       off_src=bpass->off_src[b]; abp=bpass->abp[b];
       for(c=0;c<channels;c++){
@@ -1296,7 +1313,10 @@ int make_bpass(SvSelectionType *user, char *rbuf, int idx, int slice){
   }
 
   // for each channel identify the "off source" region, compute the off source
-  // signal and the amplitude "bandpass" (i.e. mean over visibilities)
+  // signal and the amplitude "bandpass" (i.e. mean over visibilities). In
+  // case the user has chosen only one of do_band and do_base the appropriate
+  // array is reset to nominal values further below.
+#pragma omp parallel for num_threads(user->num_threads) private(c,r0,r1,r,b,off_src,abp,n,off,in,re,im)
   for(c=0;c<channels;c++){
     r0=rec_per_slice;r1=0;
     for(r=0;r<rec_per_slice;r++){
@@ -1327,8 +1347,19 @@ int make_bpass(SvSelectionType *user, char *rbuf, int idx, int slice){
     }
   }
 
+  
+  if(!user->do_band){//nominal values for bandpass
+    for(b=0;b<baselines;b++){
+      abp=bpass->abp[b];
+      for(c=0;c<channels;c++)
+	abp[c]=1.0;
+    }
+  return n_vis;
+  }
+
   // interpolate bandpass over flagged channels and normalize
   for(b=0;b<baselines;b++){
+    abp=bpass->abp[b];
     if(abp[0]<0.0){
       for(c=1;c<channels;c++)
 	if(abp[c]>0.0)
@@ -1342,7 +1373,16 @@ int make_bpass(SvSelectionType *user, char *rbuf, int idx, int slice){
     for(c=0;c<channels;c++)
       abp[c]=abp[c]/median;
   }
-    
+
+  if(!user->do_base){// replace off source with nominal values
+    for(b=0;b<baselines;b++){
+      off_src=bpass->off_src[b];
+      for(c=0;c<channels;c++)
+	{off_src[c].r=off_src[c].i=1.0;}
+    }
+    return n_vis;
+  }
+
   bpass->file_idx=idx;
   bpass->slice=slice;
   return n_vis;
@@ -1496,6 +1536,7 @@ int make_onechan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
 int make_postcorr_beam(SvSelectionType *user, char *rbuf,int r, double tm){
   CorrType        *corr=user->corr;
   VisParType      *vispar=&user->vispar;
+  VisInfoType     *vinfo=vispar->visinfo;
   BpassType       *bpass=&user->bpass;
   int              c,b,p;
   unsigned long    recl,off;
@@ -1507,16 +1548,16 @@ int make_postcorr_beam(SvSelectionType *user, char *rbuf,int r, double tm){
   Complex         *off_src;
   float           *abp;   //MAX_CHANS in newcorr.h is 8*4096
   float            re,im,re0,im0,bm[MAX_CHANS/8];
-  int              drop_csq=1;
+  int              ant0,ant1,drop_csq=user->drop_csq;
 
   recl=corr->daspar.baselines*corr->daspar.channels*sizeof(float);
   rbuf1=rbuf+r*recl;
+#pragma omp parallel for num_threads(user->num_threads) private(c,re0,im0,p,b,ant0,ant1,off_src,abp,in,re,im)
   for(c=0;c<channels;c++){
     re0=im0=bm[c]=0.0;
     for(p=0;p<user->stokes;p++){
       for(b=p;b<baselines;b+=vispar->vis_sets){//vis_sets==user->stokes
-	VisInfoType *vinfo=vispar->visinfo;
-	int ant0=vinfo[b].ant0,ant1=vinfo[b].ant1;
+	ant0=vinfo[b].ant0; ant1=vinfo[b].ant1;
 	if(drop_csq && ant0 < 11 && ant1 < 11) continue;
 	if(vinfo[b].drop) continue;
 	off_src=bpass->off_src[b]; abp=bpass->abp[b];

@@ -136,7 +136,10 @@ typedef struct sv_selection_type
   float            thresh; // threshold for flagging (units of mad)
   int              all_chan;//ignore BurstPar and copy all chans (debug use)
   int              do_band;// apply amplitude bandpass calibration
+  int              do_base;// remove baseline (i.e. mean offsource visibilities)
   int              postcorr;//generate postcorr beam output
+  int              drop_csq;// drop CSQ baselines while making postcorr beam
+  int              num_threads;//number of threads to use in parallel sections
 
 } SvSelectionType ;
 
