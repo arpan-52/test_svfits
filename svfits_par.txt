@@ -8,18 +8,22 @@
 * choice of number of threads for newly added parallel sections, option of
 * dropping CSQ baselines while making the post-corr beam
 *
+* 27/Apr/25 reorganized the burst parameters to keep the commonly used ones
+* together. Parameters being tunedfor the P band observations on 01/01/2025
+* (in progress)
+*
 * I/O Files
 *
-NFILE          6 
+NFILE          16 
 *PATH          /home/data/spotlight/FITSTESTS! directory containing raw files (defalt CWD)
-INPUT          visi1.raw,visi2.raw,visi3.raw,visi4.raw,visi5.raw,visi6.raw
+INPUT          visi1.raw,visi2.raw,visi3.raw,visi4.raw,visi5.raw,visi6.raw,visi7.raw,visi8.raw,visi9.raw,visi10.raw,visi11.raw,visi12.raw,visi13.raw,visi14.raw,visi15.raw,visi16.raw
 FITS           TEST.FITS
 ALL_CHAN       0
 *
 * Observing Parameters
 *
 OBS_MJD        60676.590278! MJD at start of observations
-FREQ_SET       5.5e8:7.5e8:4096 !freq0,freq1,nchan (Hz)
+FREQ_SET       5.0e8:3.0e8:4096 !freq0,freq1,nchan (Hz)
 ANTMASK        1073741823 ! all 30 antennas
 EPOCH          2000.0000  !Output Epoch (EPOCH<0.0 ==> date co-ordinates)
 IATUTC         37.0       !(IAT-UTC [seconds])
@@ -31,28 +35,26 @@ DEC_APP        0.9540317  ! Mean Dec (radians)
 *
 * Burst Parameters
 *
+* Generally used burst params
 BURST_NAME     OBS BURST !
-*BURST_MJD      60676.59087198! does not seem correct
-BURST_MJD      60676.59087528 ! The MJD of the burst seen is Slice 48 of files visi4,visi5 and visi6 corresponding to 20250101 14:10:51.6245978245978
+BURST_MJD      60676.69069282 ! arrival MJD of the burst (at BURST_FREQ)
+BURST_INTWD    20.0e-3    ! intrisic width (sec)
+BURST_DM       26.8       ! DM of the burst
+BURST_FREQ     5.0e8      ! Freq that the BURST_TIME refers to (Hz)
+UPDATE_BURST   1          ! update burst parms using only MJD, INT_WD and DM
+* params that are mainly for simulations
 BURST_TIME     100.0      ! arrival time at burst_freq (sec)
 BURST_DT       0.1        ! error in arrival time (sec)
-BURST_INTWD    20.0e-3    ! intrisic width (sec)
 BURST_WIDTH    2.4        ! observed burst width (sec)
-BURST_DM       28         ! DM of the burst
 BURST_DDM      0.1        ! error in the DM
-BURST_FREQ     7.5e8      ! Freq that the BURST_TIME refers to (Hz)
+* params that are meant for imaging pipeline use
 BURST_BM_ID    1          ! ID of the beam that the burst was found in
 BURST_RA       0.9376816  ! RA of beam with burst (radians, apparent)
 BURST_DEC      0.9540317  ! DEC of beam with burst (radians, apparent)
-UPDATE_BURST   1          ! update burst parms using only MJD, INT_WD and DM
 *
 *DATA PROCESSING PARMS
 *
 DO_BAND         1         ! do amplitude bandpass calibration [0/1]
-DO_BASE         1         ! subtract baseline (i.e. mean off_src)  [0/1]
 DO_FLAG         1         ! do robust statsistics based flagging [0/1]
 THRESH         20         ! threshold for flagging
 POST_CORR       1         ! generate postcorrelation beam output [0/1]
-DROP_CSQ        0         ! drop CSQ baselines while making postcorr beam [0/1]
-NUM_THREADS    16         ! number of threads to use in parallel sections
-

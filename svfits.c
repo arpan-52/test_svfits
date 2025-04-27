@@ -612,11 +612,11 @@ int main(int argc, char **argv)
   int             baselines,channels;
   InitHdrType    *hdr;
   SourceParType  *source;
-  int             b,c,slice,rec,start_rec,n_rec,rec_per_slice;
+  int             b,c,slice,rec,rec_per_slice;
   unsigned long   recl,bufsize;
   char           *rbuf;
-  double          start_time;
   char            antfile[NAMELEN],uparfile[NAMELEN];
+  int             i,start_rec,n_rec,n_files,file_order[MaxRecFiles];
   extern char    *optarg;
   extern int      optind,opterr;
 
@@ -692,12 +692,12 @@ int main(int argc, char **argv)
   // loop over files and slices, and process one full slice at a time.
   gcount=1;//FITS numbering starts from 1
   group_size=user.channels*user.stokes*sizeof(Cmplx3Type)+sizeof(UvwParType);
-  for(idx=0;idx<rfile->nfiles;idx++){
-    if((start_time=get_slice_time(&user,idx,0))<0) return -1;
+  if((n_files=get_file_order(&user,file_order))<0) return -1;
+  for(i=0;i<n_files;i++){
+    idx=file_order[i];
     if(!user.all_chan)//helpful for debug- could later copy only selected recs
-      get_rec_num(&user,idx,start_time,&start_rec,&n_rec);
+      {start_rec=rfile->start_rec[idx]; n_rec=rfile->n_rec[idx];}
     else{start_rec=0;n_rec=rec_per_slice;}// copy all data in 1st slice
-    if(n_rec==0) continue; // file has no burst data
     for(rec=start_rec;rec<start_rec+n_rec;rec+=rec_per_slice){//loop over slice
       slice=rec/rec_per_slice;
       if(!user.fake_data)

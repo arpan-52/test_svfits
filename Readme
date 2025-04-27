@@ -1,6 +1,6 @@
-JNC 19 Apr 2025
+JNC 27 Apr 2025
 
-Added parallelization of the more time consuming parts of the code (make_postcorr and make_bpass) also fixed a bug in normalizing the amplitude bandpass in make_bpass. Separated out removing the off source baseline and applying the amplitude bandpass. Now the user can use either one or both or none.
+fixed a bug where some of the FITS header parameters (OBSERVER, TITLE) were not initialized by default. Also made some changes to try and ensure that the output FITS file is in Time-Baseline order, regardless of the order of the input visibility files. (Works, but needs a some more generalization for the case in which more than one slice from a given raw visibility files contains the signal). 
 
 Some details on the files in this commit are given below.
 
@@ -16,20 +16,20 @@ newcorr.h No change
 
 plot_flagged.py  No change
 
-plot_postcorr.py No change
+plot_postcorr.py changes to work for situations where the frequency decreases with channel number (in progress, not fully debugged).
 
 Readme -- this file.
 
-read_rawvis.py no change
+read_rawvis.py small change to fix a bug where the program was not exiting cleanly when only one slice was plotted.
 
 stats.c -- No change
 
 svfits.c -- No change
 
-svfits_par.txt -- added the parameters related to the added options in svfits.c.
+svfits_par.txt -- reorganized parameter order for ease of use.
 
-svio.h -- changes to accommodate the added options to svfits.
+svio.h -- changes to accommodate the time-baseline order for the ouput FITS file.
 
-svsubs.c -- parallelized the more time consuming sections of the code, fixed some smaller bugs in normalizing the amplitude bandpass, added options to separate off_src subtraction and amplitude bandpass calibration. Updated version to 0.94
+svsubs.c -- bug fix (initalizing OBSERVER,TITLE), plus changes to try and make the output file in TIME-BASELINE order.
 
 utils.c -- No change

@@ -140,7 +140,7 @@ void prenut(UvwParType *uv,double mjd,double ra_app,double dec_app,
 #undef TINY
 
 float svVersion(void){//sets the version number for log and history
-  return 0.94;
+  return 0.941;
 }
 
 /*
@@ -723,8 +723,11 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile){
   srec->source_id=1;
   srec->freq_id=1;
   strcpy(scan->proj.code,"TEST"); // replace with GTAC project code
+  strcpy(scan->proj.observer,"DUMMY"); // replace with GTAC observer
+  strcpy(scan->proj.title,"SPOTLIGHT"); // replace with GTAC observer
   scan->proj.antmask=daspar->antmask;
   scan->proj.bandmask=daspar->bandmask;
+  scan->proj.seq=0;
   source->antmask=daspar->antmask;
   source->bandmask=daspar->bandmask;
   source->ch_width=corrpar->f_step;
@@ -880,16 +883,21 @@ double get_slice_time(SvSelectionType *user, int idx, int slice){
   visibility file.
 
   idx is the index number of the raw visibility file in the array of filenames,
-  t_start is the start time of the first slice in the file. On return start_rec
-  is the record number of the first record in the file which contains the
-  burst, and n_rec is the number of subsequent consecutive records which contain
-  the burst. nrec==0 means that this file does not contain any burst data.
+  t_start (contained in user->recfile.t_start[idx], which should be filled
+  by an earlier call to get_slice_time()) is the start time of the first slice
+  in the file. On return start_rec is the record number of the first record
+  in the file which contains the burst, and n_rec is the number of subsequent
+  consecutive records which contain the burst. nrec==0 means that this file
+  does not contain any burst data. Both start_rec and n_rec are returned in
+  the corresponding arrays in user->recfile.
 
   jnc apr 2025
 */
-int get_rec_num(SvSelectionType *user, int idx, double t_start,
-		  int *start_rec, int *n_rec){
+int get_rec_num(SvSelectionType *user, int idx){
   RecFileParType *rfile=&user->recfile;
+  double          t_start=rfile->t_start[idx];
+  int            *start_rec=rfile->start_rec+idx;
+  int            *n_rec=rfile->n_rec+idx;
   BurstParType   *burst=&user->burst;
   CorrType       *corr=user->corr;
   ScanInfoType   *scan=user->srec->scan;
@@ -936,6 +944,76 @@ int get_rec_num(SvSelectionType *user, int idx, double t_start,
 
   return 0;
 }
+int get_file_order(SvSelectionType *user, int *order){
+  RecFileParType *rfile=&user->recfile;
+  BurstParType   *burst=&user->burst;
+  CorrType       *corr=user->corr;
+  double          slice_interval=rfile->slice_interval;
+  double          t_slice=rfile->t_slice;
+  int             rec_per_slice=rfile->rec_per_slice;
+  double          integ=corr->daspar.lta*corr->corrpar.statime;
+  int             idx,i,j,k,l,index[MaxRecFiles],nfiles;
+  double          b_start[MaxRecFiles],min,tmp;
+
+  if(user->all_chan){// get the file start time and return the input order
+    for(i=0,idx=0;idx<rfile->nfiles;idx++){
+      if(get_slice_time(user,idx,0)<0.0)return -1; // start time of each file
+      order[i]=i;
+    }
+    return rfile->nfiles;
+  }
+
+
+  if(rfile->nfiles>MaxRecFiles){
+    fprintf(stderr,"exceeded max allowed files of %d in get_file_order\n",
+	    MaxRecFiles);
+    return -1;
+  }
+  // get start_time, start_rec etc for all files
+  for(i=0,idx=0;idx<rfile->nfiles;idx++){
+    if(get_slice_time(user,idx,0)<0.0)
+      {fprintf(stderr,"Could not get time for File %d\n,",idx); return -1;}
+    if(get_rec_num(user,idx))
+      {fprintf(stderr,"Could not recnum for File %d\n,",idx); return -1;}
+    if(rfile->n_rec[idx]>0){
+      b_start[i]=rfile->b_start[idx];
+      index[i]=idx;
+      i++;
+    }
+  }
+  nfiles=i;
+  if(nfiles==0){
+    fprintf(user->lfp,"No files with burst data!\n");
+    return 0; // no files with data
+  }
+
+  // order the files in time order using brute force sort
+  for(i=0;i<nfiles;i++){
+    min=b_start[i];k=i;
+    for(j=i+1;j<nfiles;j++){
+      if(b_start[j]<=min)
+	{min=b_start[j];k=j;}
+    }
+    order[i]=index[k];
+    tmp=b_start[i];
+    l=index[i];
+    b_start[i]=b_start[k];
+    index[i]=index[k];
+    b_start[k]=tmp;
+    index[k]=l;
+  }
+
+  for(i=0;i<nfiles;i++)
+    fprintf(user->lfp,"%d %f\n",order[i],rfile->b_start[order[i]]);
+
+  return nfiles;
+}
+
+
+  
+  
+
+
 /*
   computes the maximum number of channels over which the signal is spread,
   this is useful for doing buffer memory allocations.
@@ -1342,7 +1420,10 @@ int make_bpass(SvSelectionType *user, char *rbuf, int idx, int slice){
 	abp[c]=abp[c]/n;
       }else{
 	off_src[c].r=off_src[c].i=0.0;
-	abp[c]=-1.0;
+	abp[c]=-1.0;// will interpolate over later
+	if(b==0)
+	  fprintf(user->lfp,"file %d slice %d chan %c No Band/Base\n",
+		  idx,slice,c);
       }
     }
   }
@@ -1378,7 +1459,7 @@ int make_bpass(SvSelectionType *user, char *rbuf, int idx, int slice){
     for(b=0;b<baselines;b++){
       off_src=bpass->off_src[b];
       for(c=0;c<channels;c++)
-	{off_src[c].r=off_src[c].i=1.0;}
+	{off_src[c].r=off_src[c].i=0.0;}
     }
     return n_vis;
   }
@@ -1549,7 +1630,29 @@ int make_postcorr_beam(SvSelectionType *user, char *rbuf,int r, double tm){
   float           *abp;   //MAX_CHANS in newcorr.h is 8*4096
   float            re,im,re0,im0,bm[MAX_CHANS/8];
   int              ant0,ant1,drop_csq=user->drop_csq;
+  static int       wrote_hdr=0; //not thread safe
+  //structure is double aligned
+  struct postcorr_hdr{double mjd,int_wd,DM,f_start,f_end,integ;long channels;};
+  struct postcorr_hdr  phdr;
 
+  // write out some header information on first invocation
+  if(!wrote_hdr){
+    SourceParType *source=&user->srec->scan->source;
+    double         df=source->ch_width*source->net_sign[0];//signed
+    double          integ=corr->daspar.lta*corr->corrpar.statime;
+    phdr.mjd=user->burst.mjd;
+    phdr.int_wd=user->burst.int_wd;
+    phdr.DM=user->burst.DM;
+    phdr.channels=corr->daspar.channels;
+    phdr.f_start=source->freq[0];
+    phdr.f_end=source->freq[0]+phdr.channels*df;
+    phdr.integ=integ;
+    if(fwrite(&phdr,sizeof(struct postcorr_hdr),1,user->pcfp) !=1)
+      {fprintf(stderr,"Error writing hdr to beam output file\n"); return -1;}
+    wrote_hdr=1;
+  }
+
+  // compute the post-correlation beam for this record
   recl=corr->daspar.baselines*corr->daspar.channels*sizeof(float);
   rbuf1=rbuf+r*recl;
 #pragma omp parallel for num_threads(user->num_threads) private(c,re0,im0,p,b,ant0,ant1,off_src,abp,in,re,im)

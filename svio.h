@@ -87,6 +87,8 @@ typedef struct rec_file_par_type{
   char    fname[MaxRecFiles][LINELEN]; // names of the raw data files
   double  t_start[MaxRecFiles];// start time (IST?) of each file
   double  b_start[MaxRecFiles];// start time (IST?) of first rec with data
+  int     start_rec[MaxRecFiles];// first record with burst signal
+  int     n_rec[MaxRecFiles];  // number of contiguous records with burst signal
   double  t_slice;             // slice duration (sec)
   double  slice_interval;      // interval between 2 slices in file (sec)
   int     rec_per_slice;       // number of lta records per slice
@@ -215,9 +217,7 @@ int     clip(char *visbuf, SvSelectionType *user, int idx, int slice,
 	     int groups);
 int     fake_sel_chans(SvSelectionType *user, int idx, char **buf,int *restart);
 ushort  float_to_half(const float x);
-int     get_rec_num(SvSelectionType *user,int idx, double start_time,
-		    int *start_rec, int *n_rec);
-double  get_slice_time(SvSelectionType *user,int idx,int slice);
+int     get_file_order(SvSelectionType *user, int *order);
 float   half_to_float(const unsigned short x);
 int     init_user(SvSelectionType *user, char *fname, char *fname1);
 double  lmst(double mjd);

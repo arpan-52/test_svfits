@@ -24,6 +24,9 @@
 #
 # jnc apr 2025
 #
+# fixed a bug where the program was not closing cleanly if only a single
+# slice is to be plotted.
+#
 import sys
 import numpy as np
 from   scipy import stats
@@ -43,7 +46,7 @@ TimeSize=16
 Recl=MaxBase*Channels*Stokes*FloatSize
 NFiles=16
 RecPerSlice=50
-Integ=1.30172e-3 # lta integration time (sec)
+Integ=1.31072e-3 # lta integration time (sec)
 SliceDuration=RecPerSlice*Integ
 SliceInterval=NFiles*SliceDuration
 AntMask=1073741823 #30 antennas
@@ -150,6 +153,7 @@ if __name__=='__main__':
     ant1=-1
     cfname=""
     chan_sel_file=""
+    slice_date=""
     parser=argparse.ArgumentParser()
     parser.add_argument("-a","--ants", help="antenna pair in baselines",
                         nargs=2, type=int)
@@ -246,8 +250,6 @@ if __name__=='__main__':
             r=int(slice_a[ifile])*RecPerSlice
         else:
             r=slice_a[0]*RecPerSlice
-        if collate:
-            slice_date0=copy.deepcopy(SliceDate) #start first slice collation
         while(True):
             re,im=get_data(fp,idx,r,self,coherent,ant0,ant1,drop_csq,nan_stats)
             if len(re) < Channels:
@@ -271,9 +273,12 @@ if __name__=='__main__':
                     r1=ifile*RecPerSlice
                     r2=(ifile+1)*RecPerSlice
                     dyn_spc2[r1:r2]=dyn_spc1
+                    if not len(slice_date):
+                        slice_date=SliceDate
+                    else:
+                        slice_date=slice_date+" "+SliceDate.split()[1]
                     if ifile==len(files)-1:
                         dyn_spc=dyn_spc2
-                        slice_date=slice_date0
                         fname=cfname+fname+"Slice"+str(slice_a[ifile])
                     else:
                         cfname=cfname+fname+"Slice"+str(slice_a[ifile])
@@ -310,7 +315,7 @@ if __name__=='__main__':
                                color='red')
                     ax.scatter(chan1[:nrec],recnum[:nrec],marker='+',
                                color='red')
-                title=f"Dynamic Spectrum {fname}\n Slice {slice} {slice_date}\n Min={min:10.2e} Max={max:10.2e} Med={med:10.2e} Mad={mad:10.2e}"
+                title=f"{fname}\n {slice_date}\n Min={min:10.2e} Max={max:10.2e} Med={med:10.2e} Mad={mad:10.2e}"
                 ax.set_title(title)
                 if self:
                     foot="Total Power for all Antennas"
@@ -321,7 +326,7 @@ if __name__=='__main__':
                         if coherent:
                             foot="Coherent Sum of All Visibilities"
                         else:
-                            foot="Inoherent Sum of All Visibilities"
+                            foot="Incoherent Sum of All Visibilities"
                 plt.annotate(foot,xy=(0.3,0.0),xycoords='figure fraction')
                 if interactive:
                     plt.show()
@@ -330,6 +335,8 @@ if __name__=='__main__':
                 if collate:
                     exit(1) # all done
                 else:
+                    if len(slice_a) == 1:
+                        break
                     if slice_a[1] >= 0 and slice >= slice_a[1]:
                         break # go to next file
                 if nan_stats:
