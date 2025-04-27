@@ -1,7 +1,6 @@
-# script to plot the postcorr beam data made by svfits, compute the burst
-# profile, etc. Work in progress, may still have a few bugs.
-#
-# jnc 27apr25
+# script to plot the postcorrelation beam made by svfits, overlay the selection
+# done by svfits etc. Seems to be working for both Band 3 (frequency decreases
+# with channel number) and Band 4 (frequency increases with channel number).
 #
 import sys
 import numpy as np
@@ -23,13 +22,13 @@ def dedisperse(dyn_spc,dt,fs,fe,DM):
     fm=0.5*(fs+fe)
     df=(fe-fs)/channels
     prof=np.zeros(nrec)
-    print("centering at ",fm," (GHz)")
     for c in range(channels):
         f=fs+c*df
         t_dsp=K*DM*(1.0/(fm*fm)-1.0/(f*f))
         rec_shift=t_dsp/dt
         arr=copy.copy(dyn_spc[:,c])
-        prof=prof+shift(arr,rec_shift,order=1,mode='wrap')
+        med=np.median(arr)
+        prof=prof+shift(arr,rec_shift,order=1,mode='constant', cval=med)
     return prof/channels
 
 if __name__=='__main__':
@@ -84,7 +83,7 @@ if __name__=='__main__':
     freq_start=freq_start/1.0e9 #GHz
     freq_end=freq_end/1.0e9  #GHz
     channels=np.frombuffer(rbuf[48:],dtype=np.int32,count=1)[0]
-    print(mjd,int_wd,DM,freq_start,freq_end,integ,channels)
+
     #overwrite with user supplied values (if present)
     if args.dm is not None:
         DM=args.dm
@@ -110,7 +109,7 @@ if __name__=='__main__':
     try:
         file=open(chan_sel_file,mode="r")
     except:
-        print("Unable to open ",fname)
+        print("Unable to open ",chan_sel_file)
         exit(1)
     r=0
     got_start=False
@@ -139,7 +138,6 @@ if __name__=='__main__':
     ts1=time_stamp1[ts1_idx]
     c0=chan0[ts1_idx]
     c1=chan1[ts1_idx]
-    print(ts.min(),ts.max(),ts1.min(),ts1.max())
     
     # plot the post-correlation beam and data selection
     fig,ax=plt.subplots(1,1)
@@ -180,9 +178,7 @@ if __name__=='__main__':
         fh=freq_start
     else:
         fh=freq_end
-    print(fm,fh,ist_sec)
     ist_sec=ist_sec + K*DM*(1.0/(fm*fm)-1.0/(fh*fh))
-    print(ist_sec)
     plt.axvline(x=ist_sec,color='red')
     title="Incoherent de-dispersion 1.3ms Visibility\n" 
     title+=str(burst_time.iso)+" ("+str(fh)+" GHz) [UTC]"

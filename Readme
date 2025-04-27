@@ -1,6 +1,6 @@
 JNC 27 Apr 2025
+minor changes in parsing of svfits_par.txt file, some plotting programs.
 
-fixed a bug where some of the FITS header parameters (OBSERVER, TITLE) were not initialized by default. Also made some changes to try and ensure that the output FITS file is in Time-Baseline order, regardless of the order of the input visibility files. (Works, but needs a some more generalization for the case in which more than one slice from a given raw visibility files contains the signal). 
 
 Some details on the files in this commit are given below.
 
@@ -16,20 +16,20 @@ newcorr.h No change
 
 plot_flagged.py  No change
 
-plot_postcorr.py changes to work for situations where the frequency decreases with channel number (in progress, not fully debugged).
+plot_postcorr.py tested for both senses of frequency change with channel
 
 Readme -- this file.
 
-read_rawvis.py small change to fix a bug where the program was not exiting cleanly when only one slice was plotted.
+read_rawvis.py small No Change
 
 stats.c -- No change
 
 svfits.c -- No change
 
-svfits_par.txt -- reorganized parameter order for ease of use.
+svfits_par.txt -- No change
 
-svio.h -- changes to accommodate the time-baseline order for the ouput FITS file.
+svio.h -- No change
 
-svsubs.c -- bug fix (initalizing OBSERVER,TITLE), plus changes to try and make the output file in TIME-BASELINE order.
+svsubs.c -- increased the maximum size of the input line in svfits_par.txt to 2400 characters (was earlier 500)
 
 utils.c -- No change

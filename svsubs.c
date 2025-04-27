@@ -140,7 +140,7 @@ void prenut(UvwParType *uv,double mjd,double ra_app,double dec_app,
 #undef TINY
 
 float svVersion(void){//sets the version number for log and history
-  return 0.941;
+  return 0.942;
 }
 
 /*
@@ -155,15 +155,15 @@ int svuserInp (char *filename, SvSelectionType *user ){
   CorrType      *corr=user->corr;
   DasParType    *daspar=&user->corr->daspar;
   SourceParType *source=&user->srec->scan->source;
-  char           str[512],key_str[32] ;
-  int            val[512];
+  char           str[2048],key_str[32] ;
+  int            val[2048];
   FILE          *fp;
   int            var, np, k ;
 
   if((fp= fopen(filename, "rt")) ==NULL)
     {fprintf(stderr,"Cannot open %s\n",filename); return -1;}
   
-  while ( fgets(str, 500, fp) )
+  while ( fgets(str, 2040, fp) )
   { char *p = str ;
     while (*p && (*p == ' '))p++ ;
     if (*p == 0)continue ;
