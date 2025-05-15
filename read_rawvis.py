@@ -118,7 +118,7 @@ def get_data(fp,idx,rec,self,coherent,sel_ant0,sel_ant1,drop_csq,nan_stats):
             if sel_ant0 <0 and sel_ant1 <0 and not self:
                 if ibase in ShortBase:
                     continue
-                if drop_csq and (ant0 < 11 or ant1 < 11):
+                if drop_csq and (ant0 < 11 and ant1 < 11):
                     continue
             off=ibase*Channels*2
             for pol in [0,1]:
@@ -335,6 +335,9 @@ if __name__=='__main__':
                 if collate:
                     exit(1) # all done
                 else:
+                    i=fname.find("Slice")
+                    if i != -1:
+                        fname=fname[:i]
                     if len(slice_a) == 1:
                         break
                     if slice_a[1] >= 0 and slice >= slice_a[1]:

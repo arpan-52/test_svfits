@@ -136,7 +136,9 @@ typedef struct sv_selection_type
   int              update_burst; //compute burst params (see update_burst())
   int              do_flag; // mad based flagging of data 
   float            thresh; // threshold for flagging (units of mad)
-  int              all_chan;//ignore BurstPar and copy all chans (debug use)
+  int              all_chan;//copy all chans for records with burst
+  int              all_data;//copy all data; ignore burstpar
+  int              nchav; // number of channels to average (all_data only)
   int              do_band;// apply amplitude bandpass calibration
   int              do_base;// remove baseline (i.e. mean offsource visibilities)
   int              postcorr;//generate postcorr beam output
@@ -213,6 +215,8 @@ typedef unsigned short ushort;
 
 int     copy_vis(SvSelectionType *user, int idx, int slice,
 		   int start_rec, int n_rec,char *rbuf,char **outbuf);
+int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
+	    char *outbuf);
 int     clip(char *visbuf, SvSelectionType *user, int idx, int slice,
 	     int groups);
 int     fake_sel_chans(SvSelectionType *user, int idx, char **buf,int *restart);

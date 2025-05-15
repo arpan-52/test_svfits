@@ -76,8 +76,8 @@
 static float RefFreq,ChanWidth;
 
 
-//void sla_preces_(char *system,double *epoch, double *epoch1,
-//		 double *ra, double *dec,int len);
+void sla_preces_(char *system,double *epoch, double *epoch1,
+		 double *ra, double *dec,int len);
 //extern void sla_amp_(double *ra_app, double *dec_app, double *mjd, 
 //		     double *epoch1,double *ra_mean, double *dec_mean);
 int replace_nulls(char *str, int len)
@@ -401,7 +401,7 @@ int sources, double epoch1)
     //    }
     ra=source->ra_mean;dec=source->dec_mean;
     if(epoch1<0.0)epoch1=epoch;
-    //    sla_preces_("FK5",&epoch,&epoch1,&ra,&dec,3);
+    sla_preces_("FK5",&epoch,&epoch1,&ra,&dec,3);
     sut.ra = ra*180/M_PI ;
     sut.dec = dec*180/M_PI ;
     sut.epoch = epoch1;
@@ -598,25 +598,172 @@ void set_coordtype(SvSelectionType *user)
  return;
 
 }
+/*
+  function to convert only the records in which there is a burst signal into
+  random groups. If user->all_chan is set, then a multi-channel group is
+  created and written to the FITS file (see make_allchan_group() for more
+  details), otherwise, a single channel file is created, where only those
+  channels which contain the burst signal are written to the FITS file.
+  See copy_onechan_group() for more details.
+
+  The user structure contains all the required meta data, fptr is a pointer
+  to the output FITS file, which is assumed to be initiated, with the write
+  pointer at the location where the groups are to be written.
+
+  jnc may 2025
+*/
+int copy_burst(SvSelectionType *user,fitsfile *fptr){
+  BpassType      *bpass=&user->bpass;
+  RecFileParType *rfile=&user->recfile;
+  int             rec_per_slice=rfile->rec_per_slice;
+  int             baselines,channels;
+  long            k,group_size,bufsize;
+  int             recl,gcount,groups,status;
+  int             b,i,start_rec,n_rec,rec,idx,slice,flagged;
+  int             n_files,file_order[MaxRecFiles];
+  char           *visbuf,*rbuf;
+  
+  // allocate space for raw visibilities (one full timeslice is processed
+  // at a time). Space for the output random groups is allocated inside the
+  // copy_* functions
+  recl=user->corr->daspar.channels*user->corr->daspar.baselines*sizeof(float);
+  bufsize=rec_per_slice*recl;
+  if((rbuf=malloc(bufsize))==NULL){
+    fprintf(stderr,"Malloc error for %ld bytes\n",bufsize);
+    return -1;
+  }
+  // allocate memory for the mean spectrum and the amplitude bandpass
+  channels=user->corr->daspar.channels; //input channels
+  baselines=user->baselines;//output baselines
+  for(b=0;b<baselines;b++){
+    if((bpass->off_src[b]=(Complex*)malloc(channels*sizeof(Complex)))==NULL)
+      {fprintf(stderr,"Malloc error in make_bpass\n"); return -1;}
+    if((bpass->abp[b]=(float*)malloc(channels*sizeof(float)))==NULL)
+      {fprintf(stderr,"Malloc error in make_bpass\n"); return -1;}
+  }
+  
+  gcount=1;//FITS numbering starts from 1
+  group_size=user->channels*user->stokes*sizeof(Cmplx3Type)+sizeof(UvwParType);
+
+  // read visibilties from raw files, write out random groups to FITS FILE
+  // loop over files and slices, and process one full slice at a time.
+  if((n_files=get_file_order(user,file_order))<0)
+    {fprintf(stderr,"No data found\n");return -1;}
+  for(i=0;i<n_files;i++){
+    idx=file_order[i];
+    start_rec=rfile->start_rec[idx]; n_rec=rfile->n_rec[idx];
+    //loop over slices, work with entire slice even if burst occupies only
+    //part of the slice
+    for(rec=start_rec;rec<start_rec+n_rec;rec+=rec_per_slice){
+      slice=rec/rec_per_slice;
+      if(!user->fake_data)
+	if(read_slice(user,idx,slice,rbuf)) return -1;
+      if((groups=copy_vis(user,idx,slice,start_rec,n_rec,rbuf,&visbuf))<0)
+	{fprintf(stderr,"Error processing %s\n",rfile->fname[idx]);return -1;}
+      if(!user->all_chan && user->do_flag){//flagging all chans is too expensive
+	if((flagged=clip(visbuf,user,idx,slice,groups))<0)return -1;
+	fprintf(user->lfp,"File: %d Slice:%d  Flagged %d of %d visibilities\n",
+		idx,slice,flagged,groups);
+      }
+      k =  groups*group_size;
+      if (user->corr->endian & LittleEndian)swap_long(visbuf, k/sizeof(float));
+      ffptbb(fptr,gcount,1,(long)k,(unsigned char *)visbuf,&status) ; 
+      if (status){printerror (status);break;}
+      fprintf(stderr,"File %d Slice %d wrote %12.4e MBytes\n",idx,slice,
+	      (1.0*k)/1.0e6);
+      gcount += groups;
+      free(visbuf); // allocated inside the copy_* functions
+    }
+  }
+  gcount--; // total number of groups written
+
+  for(b=0;b<baselines;b++){
+    free(bpass->off_src[b]);
+    free(bpass->abp[b]);
+  }
+  free(rbuf);
+  
+  return gcount;
+}
+/*
+  function to copy all of the input raw visibilities into random groups,
+  irrespective of whether the data contains a burst or not. This could be
+  useful for making a continuum map for astrometry etc.
+
+  The user structure contains all the required meta data, fptr is a pointer
+  to the output FITS file, which is assumed to be initiated, with the write
+  pointer at the location where the groups are to be written.
+
+  jnc may 2025
+ */
+int copy_allvis(SvSelectionType *user,fitsfile *fptr){
+  RecFileParType *rfile=&user->recfile;
+  int             rec_per_slice=rfile->rec_per_slice;
+  int             baselines=user->baselines;
+  CorrType       *corr=user->corr;
+  int             channels=corr->daspar.channels;
+  int             stokes=user->stokes;
+  long            k,group_size,bufsize;
+  int             recl,gcount,groups,status;
+  int             b,idx,slice,flagged;
+  char           *visbuf,*rbuf;
+  
+  // allocate space for raw visibilities (one full timeslice is processed
+  // at a time). Space for the output random groups is allocated inside the
+  // copy_* functions
+  recl=user->corr->daspar.channels*user->corr->daspar.baselines*sizeof(float);
+  bufsize=rec_per_slice*recl;
+  if((rbuf=malloc(bufsize))==NULL){
+    fprintf(stderr,"Malloc error for %ld bytes\n",bufsize);
+    return -1;
+  }
+
+  // allocate space for the output groups
+  group_size=user->channels*user->stokes*sizeof(Cmplx3Type)+sizeof(UvwParType);
+  groups=user->baselines/user->stokes;
+  bufsize=groups*group_size;//only one record on output
+  if((visbuf=(char*)malloc(bufsize))==NULL)
+    {fprintf(stderr,"Malloc Error\n");return -1;}
+
+  // read visibilties from raw files, write out random groups to FITS FILE
+  // loop over files and slices, and process one full slice at a time.
+  gcount=1;//FITS numbering starts from 1
+  for(idx=0;idx<rfile->nfiles;idx++){
+    for(slice=0;;slice++){//process data until we reach EoF
+      if(read_slice(user,idx,slice,rbuf)<0) break; //Reached EoF
+      if((groups=avg_vis(user,idx,slice,rbuf,visbuf))<0){
+	fprintf(stderr,"Error processing %s slice %d\n",rfile->fname[idx],
+		 slice);
+	return -1;
+      }
+      k =  groups*group_size;
+      if (user->corr->endian & LittleEndian)swap_long(visbuf, k/sizeof(float));
+      ffptbb(fptr,gcount,1,(long)k,(unsigned char *)visbuf,&status) ; 
+      if (status){printerror (status);break;}
+      fprintf(stderr,"File %d Slice %d wrote %12.4e MBytes\n",idx,slice,
+	      (1.0*k)/1.0e6);
+      gcount += groups;
+    }
+  }
+  gcount--; // total number of groups written
+
+  free(rbuf);
+  free(visbuf);
+
+  return gcount;
+}
 int main(int argc, char **argv)
-{ int             k,status=0,pcount=8,groups,flagged,idx,group_size;
+{ int             status=0,pcount=8,groups,flagged,idx,group_size;
   int             sources=1,frequencies=1; // for SU and FQ tables
   float           version;
   long            gcount;
   fitsfile       *fptr;
   char            outfile[LINELEN] ;
-  char           *visbuf;
   SvSelectionType user;
-  BpassType      *bpass=&user.bpass;
-  RecFileParType *rfile=&user.recfile;
-  int             baselines,channels;
   InitHdrType    *hdr;
   SourceParType  *source;
-  int             b,c,slice,rec,rec_per_slice;
-  unsigned long   recl,bufsize;
-  char           *rbuf;
-  char            antfile[NAMELEN],uparfile[NAMELEN];
-  int             i,start_rec,n_rec,n_files,file_order[MaxRecFiles];
+  char            antfile[PATHLEN],uparfile[PATHLEN];
+  int             c;
   extern char    *optarg;
   extern int      optind,opterr;
 
@@ -625,8 +772,8 @@ int main(int argc, char **argv)
   if(argc-1){
     while((c=getopt(argc,argv,"a:u:h"))!=-1){
       switch(c){
-	case 'a': strncpy(antfile,optarg,NAMELEN-1); break;
-	case 'u': strncpy(uparfile,optarg,NAMELEN-1);break;
+	case 'a': strncpy(antfile,optarg,PATHLEN-1); break;
+	case 'u': strncpy(uparfile,optarg,PATHLEN-1);break;
         case 'h': // default to next case
         case '?': fprintf(stderr,
 		  "Usage: svfits [-a AntSampFile] [-u UserParmFile]\n");
@@ -634,11 +781,9 @@ int main(int argc, char **argv)
       }
     }
   }
-
  
   fprintf(stdout,"     ----- SVFITS  version %.2f  -----  \n",svVersion()) ;
   fprintf(stdout,"FITSIO version number = %f\n",ffvers(&version));
-  //print_user(&user);
 
   //need to initialize user, corr, etc over here
   user.hdr=(InitHdrType*)malloc(sizeof(InitHdrType));
@@ -649,7 +794,6 @@ int main(int argc, char **argv)
   source=&user.srec->scan->source;
   user.corr=(CorrType*)malloc(sizeof(CorrType));
   if(init_user(&user,uparfile,antfile)<0){return -1;}
-  //user.dataform = hdr->item[DataVal].form ; // WHAT IS THIS USED FOR
   RefFreq   = source->freq[0];
   ChanWidth = source->ch_width*source->net_sign[0] ;
 
@@ -667,59 +811,12 @@ int main(int argc, char **argv)
     return -1 ;
   }
 
-  // allocate space for raw visibilities (one full timeslice is processed
-  // at a time). Space for the output random groups is allocated inside the
-  // copy_* functions
-  recl=user.corr->daspar.channels*user.corr->daspar.baselines*sizeof(float);
-  rec_per_slice=rfile->rec_per_slice;
-  bufsize=rec_per_slice*recl;
-  if((rbuf=malloc(bufsize))==NULL){
-    fprintf(stderr,"Malloc error for %ld bytes\n",bufsize);
-    return -1;
-  }
+  if(user.all_data)
+    {if((gcount=copy_allvis(&user,fptr))<0) return -1;}
+  else
+    {if((gcount=copy_burst(&user,fptr))<0) return -1;}
 
-  // allocate memory for the mean spectrum and the amplitude bandpass
-  channels=user.corr->daspar.channels; //input channels
-  baselines=user.baselines;//output baselines
-  for(b=0;b<baselines;b++){
-    if((bpass->off_src[b]=(Complex*)malloc(channels*sizeof(Complex)))==NULL)
-      {fprintf(stderr,"Malloc error in make_bpass\n"); return -1;}
-    if((bpass->abp[b]=(float*)malloc(channels*sizeof(float)))==NULL)
-      {fprintf(stderr,"Malloc error in make_bpass\n"); return -1;}
-  }
-
-  // read visibilties from raw files, write out random groups to FITS FILE
-  // loop over files and slices, and process one full slice at a time.
-  gcount=1;//FITS numbering starts from 1
-  group_size=user.channels*user.stokes*sizeof(Cmplx3Type)+sizeof(UvwParType);
-  if((n_files=get_file_order(&user,file_order))<0) return -1;
-  for(i=0;i<n_files;i++){
-    idx=file_order[i];
-    if(!user.all_chan)//helpful for debug- could later copy only selected recs
-      {start_rec=rfile->start_rec[idx]; n_rec=rfile->n_rec[idx];}
-    else{start_rec=0;n_rec=rec_per_slice;}// copy all data in 1st slice
-    for(rec=start_rec;rec<start_rec+n_rec;rec+=rec_per_slice){//loop over slice
-      slice=rec/rec_per_slice;
-      if(!user.fake_data)
-	if(read_slice(&user,idx,slice,rbuf)) return -1;
-      if((groups=copy_vis(&user,idx,slice,start_rec,n_rec,rbuf,&visbuf))<0)
-	{fprintf(stderr,"Error processing %s\n",rfile->fname[idx]);return -1;}
-      if(!user.all_chan && user.do_flag){//flagging all chans is too expensive
-	if((flagged=clip(visbuf,&user,idx,slice,groups))<0)return -1;
-	fprintf(user.lfp,"File: %d Slice:%d  Flagged %d of %d visibilities\n",
-		idx,slice,flagged,groups);
-      }
-      k =  groups*group_size;
-      if (user.corr->endian & LittleEndian) swap_long(visbuf, k/sizeof(float)) ;
-      ffptbb(fptr,gcount,1,(long)k,(unsigned char *)visbuf,&status) ; 
-      if (status){printerror (status);break;}
-      fprintf(stderr,"File %d Slice %d wrote %12.4e MBytes\n",idx,slice,
-	      (1.0*k)/1.0e6);
-      gcount += groups;
-      free(visbuf); // allocated inside the copy_* functions
-    }
-  }
-  gcount--; // total number of groups written
+  // update total number of groups   
   if(ffukyj(fptr,"GCOUNT",gcount," ",&status)) return printerror(status);
   if(ffclos(fptr,&status)) return printerror(status) ;
 
@@ -734,13 +831,10 @@ int main(int argc, char **argv)
   if(ffclos(fptr,&status)) printerror( status );
   
   free(user.hdr) ;
-  free(rbuf);
-  for(b=0;b<baselines;b++){
-      free(bpass->off_src[b]);
-      free(bpass->abp[b]);
-  }
-
   fprintf(stdout,"Created %s\n",user.fitsfile);
   fprintf(stdout,"See svfits.log for details\n");
+
   return 0 ;
 }
+
+

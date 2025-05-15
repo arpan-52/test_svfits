@@ -1,60 +1,60 @@
+* parameter file for PSR0329+54 observations taken 
+*  RA(MEAN)     DEC(MEAN)    DATE        IST       RF(MHz) CW(kHz)   
+* 03h35m02.24 +54d41'41.43" 07/Jan/2025 21:32:30  550.00   48.828
+* Phase Centre Apparent Coords: 03h35m03.307s +54d42'00.644"
 *
-* 18/Apr/25 inputs for svfits version 0.93, including computation of the
-* postcorrelation beam. The inputs here were tested with the PSR0329+54
-* data taken on 01/01/2025.
+* PSR 0329+54 == 03:32:59.368 +54:34:43.57 (J2000)
+*                03:34:54.141 +54:39:41.930 (J2005.0) Mean
+*                03:35:55.118 +54:40:00.909 (J2005.0) App
+*                pulsar is 70 arc sec off in RA and 5 arcmin
+*                MJD 60682.668402778
 *
-* 19/Apr/25 added options for separately doing bandpass correction and off
-* source subtraction (were combined into DO_BAND earlier) and also added
-* choice of number of threads for newly added parallel sections, option of
-* dropping CSQ baselines while making the post-corr beam
-*
-* 27/Apr/25 reorganized the burst parameters to keep the commonly used ones
-* together. Parameters being tunedfor the P band observations on 01/01/2025
-* (in progress)
-*
+* Trigger software gives :
+* BM720_MJD60682.6686663_T94.9773940_DM26.70000_SNR224.88654.h5
+* i.e. burst MJD = 60682.6686663+94.9773940/86400 =60682.669765575
 * I/O Files
 *
 NFILE          16 
-*PATH          /home/data/spotlight/FITSTESTS! directory containing raw files (defalt CWD)
+PATH          /home/data/spotlight/FITSTESTS! directory containing raw files (defalt CWD)
 INPUT          visi1.raw,visi2.raw,visi3.raw,visi4.raw,visi5.raw,visi6.raw,visi7.raw,visi8.raw,visi9.raw,visi10.raw,visi11.raw,visi12.raw,visi13.raw,visi14.raw,visi15.raw,visi16.raw
-FITS           TEST.FITS
-ALL_CHAN       0
+FITS           TEST.FITS !output FITS file
+ALL_CHAN       0  ! copy all channels for records containing burst [0/1]
+ALL_DATA       1  ! copy all data, irrespective of where the burst signal is [0/1]
+NCHAV          16 ! number of channels to average together (only when ALL_DATA ==1)
 *
 * Observing Parameters
 *
-OBS_MJD        60676.590278! MJD at start of observations
-FREQ_SET       5.0e8:3.0e8:4096 !freq0,freq1,nchan (Hz)
+OBS_MJD        60682.668402778! MJD at start of observations
+FREQ_SET       5.5e8:7.5e8:4096 !freq0,freq1,nchan (Hz)
 ANTMASK        1073741823 ! all 30 antennas
 EPOCH          2000.0000  !Output Epoch (EPOCH<0.0 ==> date co-ordinates)
 IATUTC         37.0       !(IAT-UTC [seconds])
 COORD_TYPE     DEFAULT    ! Co-ord Type (Options: DEFAULT/APPARENT/MEAN)
-RA_MEAN        0.9293406  ! Apparent RA (radians)
-DEC_MEAN       0.9525862  ! Apparent DEC (radians)
-RA_APP         0.9376816  ! Mean RA (radians)
-DEC_APP        0.9540317  ! Mean Dec (radians)
+RA_MEAN        0.9382774  ! Mean RA (radians)
+DEC_MEAN       0.9546051  ! Mean DEC (radians)
+RA_APP         0.9383550  ! Apparent RA (radians)
+DEC_APP        0.9546982  ! Apparent Dec (radians)
 *
 * Burst Parameters
 *
-* Generally used burst params
 BURST_NAME     OBS BURST !
-BURST_MJD      60676.69069282 ! arrival MJD of the burst (at BURST_FREQ)
-BURST_INTWD    20.0e-3    ! intrisic width (sec)
-BURST_DM       26.8       ! DM of the burst
-BURST_FREQ     5.0e8      ! Freq that the BURST_TIME refers to (Hz)
-UPDATE_BURST   1          ! update burst parms using only MJD, INT_WD and DM
-* params that are mainly for simulations
+BURST_MJD      60682.669727585! 21:34:24.46333660 IST
 BURST_TIME     100.0      ! arrival time at burst_freq (sec)
 BURST_DT       0.1        ! error in arrival time (sec)
+BURST_INTWD    20.0e-3    ! intrisic width (sec)
 BURST_WIDTH    2.4        ! observed burst width (sec)
+BURST_DM       28         ! DM of the burst
 BURST_DDM      0.1        ! error in the DM
-* params that are meant for imaging pipeline use
+BURST_FREQ     7.5e8      ! Freq that the BURST_TIME refers to (Hz)
 BURST_BM_ID    1          ! ID of the beam that the burst was found in
 BURST_RA       0.9376816  ! RA of beam with burst (radians, apparent)
 BURST_DEC      0.9540317  ! DEC of beam with burst (radians, apparent)
+UPDATE_BURST   1          ! update burst parms using only MJD, INT_WD and DM
 *
 *DATA PROCESSING PARMS
 *
 DO_BAND         1         ! do amplitude bandpass calibration [0/1]
-DO_FLAG         1         ! do robust statsistics based flagging [0/1]
+DO_BASE         1         ! subtract the off source baseline [0/1]
+DO_FLAG         0         ! do robust statsistics based flagging [0/1]
 THRESH         20         ! threshold for flagging
 POST_CORR       1         ! generate postcorrelation beam output [0/1]

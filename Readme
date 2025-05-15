@@ -1,5 +1,5 @@
-JNC 27 Apr 2025
-minor changes in parsing of svfits_par.txt file, some plotting programs.
+JNC 15/May/25
+Added option to copy all of the data, regardless of where the burst signal is, flipped the sign of the visibilities to match test observations of offset sources, minor changes in parsing of svfits_par.txt file, some plotting programs. Added some documentation in the SVFITS.md markdown file.
 
 
 Some details on the files in this commit are given below.
@@ -16,20 +16,22 @@ newcorr.h No change
 
 plot_flagged.py  No change
 
-plot_postcorr.py tested for both senses of frequency change with channel
+plot_postcorr.py added making a plot of the de-dispersed time series and showing the burse-time given by the trigger software, and other minor changes.
 
 Readme -- this file.
 
-read_rawvis.py small No Change
+read_rawvis.py minor changes to the way the plots are titled.
 
 stats.c -- No change
 
-svfits.c -- No change
+SVFITS.md  markdown file with some user docummentation
 
-svfits_par.txt -- No change
+svfits.c -- added a mode where all of the input data is converted to UVFITS regardless of where the burst signal lies. 
 
-svio.h -- No change
+svfits_par.txt -- updated to include the parameters to allow for all of the data to be converted to fits (ALL_DATA,NCHAV)
 
-svsubs.c -- increased the maximum size of the input line in svfits_par.txt to 2400 characters (was earlier 500)
+svio.h -- small changes corresponding to the new options in svfits.
+
+svsubs.c -- increased the maximum size of the command line option parameters, and also flipped the visibility sign to match the observed position of the offset source in test observations.
 
 utils.c -- No change

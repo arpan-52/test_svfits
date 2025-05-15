@@ -165,6 +165,9 @@ if __name__=='__main__':
 
     # create and plot the de-deispersed profile
     prof=dedisperse(ds,integ,freq_start,freq_end,DM)
+    med=np.median(prof)
+    mad=np.median(np.abs(prof-med))
+    snr=prof.max()/mad
     fig,ax=plt.subplots(1,1)
     ax.plot(ts,prof)
     jd=mjd+2400000.5
@@ -181,7 +184,8 @@ if __name__=='__main__':
     ist_sec=ist_sec + K*DM*(1.0/(fm*fm)-1.0/(fh*fh))
     plt.axvline(x=ist_sec,color='red')
     title="Incoherent de-dispersion 1.3ms Visibility\n" 
-    title+=str(burst_time.iso)+" ("+str(fh)+" GHz) [UTC]"
+    title=title+str(burst_time.iso)+" ("+str(fh)+" GHz) [UTC]\n"
+    title=title+f"Med={med:12.6e} Mad={mad:12.6e} SNR={snr:10.4e}"
     ax.set_title(title)
     ax.set_xlabel("IST Time ("+str(fm)+" GHz)")
     ax.set_ylabel("Power")
