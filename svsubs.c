@@ -141,7 +141,7 @@ void prenut(UvwParType *uv,double mjd,double ra_app,double dec_app,
 #undef TINY
 
 float svVersion(void){//sets the version number for log and history
-  return 0.95;
+  return 0.951;
 }
 
 /*
@@ -217,7 +217,9 @@ int svuserInp (char *filename, SvSelectionType *user ){
       case DecApp   :sscanf(p,"%lf",&user->srec->scan->source.dec_app);break;
       case RaMean   :sscanf(p,"%lf",&user->srec->scan->source.ra_mean);break;
       case DecMean  :sscanf(p,"%lf",&user->srec->scan->source.dec_mean);break;	      case StokesType: sscanf(p,"%hd",&user->stokes_type);break;
-      case BurstName:strcpy(user->burst.name,p);break;
+      case BurstName:strcpy(user->burst.name,p);
+	             strcpy(user->srec->scan->source.object,user->burst.name);
+		     break;
       case BurstMJD :sscanf(p,"%lf",&user->burst.mjd);break;
       case BurstTime:sscanf(p,"%lf",&user->burst.t);break;
       case BurstDT  :sscanf(p,"%lf",&user->burst.dt);break;
@@ -771,7 +773,10 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile){
   // over ride defaults by parameters given by the user
   if(svuserInp(uparfile,user)) return -1;
   if(user->all_chan) user->channels=corr->daspar.channels;
-  if(user->all_data) user->channels=corr->daspar.channels/user->nchav;
+  if(user->all_data){
+    user->channels=corr->daspar.channels/user->nchav;
+    source->ch_width *=user->nchav;
+  }
   //update burst parameters
   if(user->update_burst)update_burst(user);
   // setup the visibility meta data
@@ -1910,8 +1915,8 @@ int copy_vis(SvSelectionType *user, int idx, int slice,
 }
 enum{SampleSize=1000};
 typedef struct vis_sel_type{int r,c;} VisSelType;
-int approx_stats(char *rbuf,unsigned int off, int recl,int channels,
-		VisSelType *selvis,int nsamp,float *med, float *mad){
+int approx_stats(char *rbuf,unsigned int off, int recl,VisSelType *selvis,
+		 int nsamp,float *med, float *mad){
   int             v,n;
   float           re,im,vdata[SampleSize];
   unsigned short *in;
@@ -2006,6 +2011,9 @@ int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
   // convert selected data into random groups
   recl=corr->daspar.baselines*corr->daspar.channels*sizeof(float);
   flagged=0;
+
+  // average over records and channels, the flagged count will not be
+  // correct for multi-threaded computation
   for(b=0;b<baselines;b+=stokes){//(stokes=2==vispar->vis_sets)
     VisInfoType *vinfo=vispar->visinfo;
     int ant0=vinfo[b].ant0,ant1=vinfo[b].ant1; //same for all base in set
@@ -2014,9 +2022,9 @@ int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
     out=(Cmplx3Type*)(obuf+off+sizeof(UvwParType));//data for this group
     for(b1=b;b1<b+stokes;b1++){//all baselines in group
       if(user->do_flag)
-	if(approx_stats(rbuf,vinfo[b1].off,recl,channels,selvis,SampleSize,&med,
-			&mad)<0) return -1;
-      for(c=0;c<channels;c+=nchav){
+	if(approx_stats(rbuf,vinfo[b1].off,recl,selvis,SampleSize,&med,&mad)<0)
+	  return -1;
+      for(c=0;c<corr->daspar.channels;c+=nchav){
 	out->r=out->i=0.0;out->wt=-1.0;//default flagged
 	for(n=0,c1=c;c1<c+nchav;c1++){//average over channels and records
 	  for(r=0;r<rec_per_slice;r++){
