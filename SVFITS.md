@@ -44,13 +44,15 @@ The general format of the user parameter file (i.e. the one specified using the 
 
 - IATUTC offset in seconds between IAT and UTC. The system has a built in default which can be over ridden here.
 
-- **EPOCH** the epoch that the output (u,v,w) coordinates should be rotated to. By default it rotates to 2000.0 (Julian)
+- **EPOCH**  No longer used. The output visibilities are forced to J2000
 
 - **OBS_MJD** the start MJD of the observation. 
 
 - **FREQ_SET**  The frequency setting, i.e. a colon separated frequency of the first, last channel (Hz) and the number of channels. For example 5.5e6:7.5e8:4096 for Band 4. In future this should be taken from the corr and scan structures.
 
-- **COORD_TYPE** specifies the input coordinate type (MEAN or APPARENT), setting this to DEFAULT is safe. 
+- **COORD_TYPE** No longer used
+
+- **RECENTRE** change the phase centre to the BURST_{RA,DEC}.
 
 - **RA_APP** The apparent right ascension of the phase centre. In future this should be taken from the scan structure
 

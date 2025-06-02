@@ -145,7 +145,11 @@ typedef struct sv_selection_type
   int              postcorr;//generate postcorr beam output
   int              drop_csq;// drop CSQ baselines while making postcorr beam
   int              num_threads;//number of threads to use in parallel sections
-
+  double           i2eapp[3][3],emean2i[3][3];//matrices for J2000 coversion
+  int              recentre; // recentre visibilities to new phase centre
+  double           rmat[3][3]; //rotation matrix for new phase centre
+  double           lmn[3]; // offset coordinates - original UVW frame(J2000)
+  double           lmn_a[3]; //offset coordinates - original uvw frame (app)
 } SvSelectionType ;
 
 // various structures used while making FITS file tables
@@ -214,6 +218,8 @@ typedef struct
 
 typedef unsigned short ushort;
 
+void app2j2000(double ra_app,double dec_app, double mjd, double *ra,
+	       double *dec);
 int     copy_vis(SvSelectionType *user, int idx, int slice,
 		   int start_rec, int n_rec,char *rbuf,char **outbuf);
 int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
@@ -224,6 +230,7 @@ int     fake_sel_chans(SvSelectionType *user, int idx, char **buf,int *restart);
 ushort  float_to_half(const float x);
 int     get_file_order(SvSelectionType *user, int *order);
 float   half_to_float(const unsigned short x);
+void    init_mat(SvSelectionType *user);
 int     init_user(SvSelectionType *user, char *fname, char *fname1);
 double  lmst(double mjd);
 char   *mjd2iau_date(double mjd);

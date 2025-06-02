@@ -76,10 +76,6 @@
 static float RefFreq,ChanWidth;
 
 
-void sla_preces_(char *system,double *epoch, double *epoch1,
-		 double *ra, double *dec,int len);
-//extern void sla_amp_(double *ra_app, double *dec_app, double *mjd, 
-//		     double *epoch1,double *ra_mean, double *dec_mean);
 int replace_nulls(char *str, int len)
 { int i,k ;
   k = strlen(str) ;
@@ -335,12 +331,12 @@ int writefqtable(fitsfile *fptr, SvSelectionType *user, int scans, int frequenci
   return status ;
 }
 // create the source table
-int writesutable(fitsfile *fptr, SvSelectionType *user, int scans, 
-int sources, double epoch1) 
+int writesutable(fitsfile *fptr, SvSelectionType *user, int scans, int sources, double epoch1) 
 {
   enum {tfields=19};
   ScanRecType *srec = user->srec ;
   SourceParType *source ;
+  BurstParType  *burst=&user->burst;
   CorrType *corr = user->corr ;
   struct su_struct sut ;
   double ra,dec,epoch ;
@@ -393,19 +389,16 @@ int sources, double epoch1)
     for (j=0; j<4; j++)sut.calcode[j] = ' ';
     if(source->calcode>0)sut.calcode[0]='C';
     sut.bandwidth = user->channels*user->chan_inc*source->ch_width ;
-    epoch=2000.0 + (corr->daspar.mjd_ref - 51544.5)/365.25 ;
-    //    if(user->force_app)
-    //    {   sla_amp_(&source->ra_app,&source->dec_app,&corr->daspar.mjd_ref,&epoch,
-    //	     &source->ra_mean,&source->dec_mean);
-    //      fprintf(stderr,"Note: Forced apparent co-ordinates\n");
-    //    }
-    ra=source->ra_mean;dec=source->dec_mean;
-    if(epoch1<0.0)epoch1=epoch;
-    sla_preces_("FK5",&epoch,&epoch1,&ra,&dec,3);
-    sut.ra = ra*180/M_PI ;
-    sut.dec = dec*180/M_PI ;
-    sut.epoch = epoch1;
-   
+    epoch=2000.0; //uvw coordinates now always rotated to 2000.0
+    if(!user->recentre)
+      app2j2000(source->ra_app,source->dec_app,user->recfile.mjd_ref,
+		&ra,&dec);
+    else
+      app2j2000(burst->ra_app,burst->dec_app,user->recfile.mjd_ref,
+		&ra,&dec);
+    sut.ra   = ra*180/M_PI ;
+    sut.dec  = dec*180/M_PI ;
+    sut.epoch= epoch1;
     sut.ra_app = source->ra_app*180/M_PI ;
     sut.dec_app = source->dec_app*180/M_PI ;
     sut.pmra = (source->dra * 86400)*180/M_PI ;
@@ -475,10 +468,7 @@ int init_hdr( fitsfile *fptr, SvSelectionType *user, int pcount, int *status,
   naxes[4]= user->sidebands ;
   naxes[5]=1;
   naxes[6]=1;
-  if(epoch1 < 0.0)
-    epoch = 2000.0 + (corr->daspar.mjd_ref - 51544.5)/365.25 ;
-  else
-    epoch = epoch1;
+  epoch = 2000.0;// uvw now always in J2000
   crval[3] = RefFreq ;
   crpix[3] = 0.5 ;  /*GMRT frequency referes to the edge of the channel*/
   cdelt[3] = ChanWidth ;
@@ -618,7 +608,8 @@ int copy_burst(SvSelectionType *user,fitsfile *fptr){
   int             rec_per_slice=rfile->rec_per_slice;
   int             baselines,channels;
   long            k,group_size,bufsize;
-  int             recl,gcount,groups,status;
+  int             recl,status=0;
+  int             gcount,groups;
   int             b,i,start_rec,n_rec,rec,idx,slice,flagged;
   int             n_files,file_order[MaxRecFiles];
   char           *visbuf,*rbuf;
@@ -704,7 +695,7 @@ int copy_allvis(SvSelectionType *user,fitsfile *fptr){
   int             channels=corr->daspar.channels;
   int             stokes=user->stokes;
   long            k,group_size,bufsize;
-  int             recl,gcount,groups,status;
+  int             recl,gcount,groups,status=0;
   int             b,idx,slice,flagged;
   char           *visbuf,*rbuf;
   

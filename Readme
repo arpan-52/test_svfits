@@ -1,5 +1,5 @@
-JNC 20/May/25
-Working on getting the coordinates correct using offset observations B0329+54. Part of the problem was traced to the fact that the mjd_ref for the vispar file is different than the mjd_ref for the observation (unlike the case for lta files). Fixed this but there still may be more problems. Also parallelized the computations for ALL_DATA, which has speeded things up significantly.
+JNC 02/June/25
+Working on getting the coordinates correct. This continues to be work in progress. The current version uses the novasc library for positional astronomy instead of the starlink sla library (which is no longer maintained). Code for rotating the visibilties to a new phase centre as well as computing the post-correlation beam after rotation to the new centre has been added. Testing is *still incomplete*
 
 Some details on the files in this commit are given below.
 
@@ -15,22 +15,22 @@ newcorr.h No change
 
 plot_flagged.py  No change
 
-plot_postcorr.py added making a plot of the de-dispersed time series and showing the burse-time given by the trigger software, and other minor changes.
+plot_postcorr.py No change
 
 Readme -- this file.
 
-read_rawvis.py minor changes to the way the plots are titled.
+read_rawvis.py No change
 
 stats.c -- No change
 
-SVFITS.md  markdown file with some user docummentation
+SVFITS.md  updated to reflect new/unused parameters.
 
-svfits.c -- printing out the version to 2 decimal digits now.
+svfits.c -- modified to force coordinates to J2000 and use novasc instead of SLA
 
-svfits_par.txt -- updated to include the parameters to allow for all of the data to be converted to fits (ALL_DATA,NCHAV)
+svfits_par.txt -- updated to include RECENTRE parameter which controls whether phase centre is to be shifted.
 
 svio.h -- small changes corresponding to the new options in svfits.
 
-svsubs.c -- work on correcting the mjd_ref, this has improved the coordinate match for offset sources, but there may still be a residual error. Also parallelized the computations in the ALL_DATA case.
+svsubs.c -- continuing work on getting the coordinates correct. This version uses novasc instead of sla and also forces the coordinates to J2000 (user input is ignored). Also has an option for changing the phasecentre.
 
 utils.c -- No change

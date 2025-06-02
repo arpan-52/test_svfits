@@ -5,11 +5,11 @@ FC = gfortran
 #
 # FLAGS
 #
-CFLAGS = -fopenmp -g -O3
+CFLAGS = -fopenmp -g 
 #
 # Libraries
 CLIBS= -L /usr/lib/x86_64-linux-gnu/ -lz 
-STATIC_LIBS= /home/asoft/lib/libsla.a /home/asoft/lib/libcfitsio.a
+STATIC_LIBS= /home/asoft/lib/libnovasc.a /home/asoft/lib/libcfitsio.a
 #
 ALL= svfits 
 all:$(ALL)
