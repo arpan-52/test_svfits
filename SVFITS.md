@@ -38,7 +38,7 @@ The general format of the user parameter file (i.e. the one specified using the 
 
 - **ALL_CHAN** copy all channels for records containing the burst signal to the output FITS file. In this case the output FITS file will have 4096 spectral channels. By default the output FITS file has only one channel. 
 
-- **ALL_DATA** convert all of the data into the UVFITS format, irrespective of the burst parameters. This could be useful to make a continuum map to identify background point sources that could be used for astrometry.
+- **ALL_DATA** convert all of the data into the UVFITS format, irrespective of the burst parameters. This could be useful to make a continuum map to identify background point sources that could be used for astrometry. To reduce the data size, all of the records in a given slice are averaged together in time. Averaging in frequency is also possible by setting NCHAV to > 1.
 
 - **NCHAV** The number of channels to average together when creating the output UVFITS file. This applies only when the **ALL_DATA** flag is set.
 

@@ -141,7 +141,7 @@ void prenut(UvwParType *uv,double mjd,double ra_app,double dec_app,
 #undef TINY
 
 float svVersion(void){//sets the version number for log and history
-  return 0.951;
+  return 0.952;
 }
 
 /*
@@ -769,7 +769,7 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile){
   rfile->t_start[0]=0;
   for(i=1;i<rfile->nfiles;i++) // start time for data in file
     rfile->t_start[i]=rfile->t_start[i-1]+rfile->t_slice;
-
+  rfile->mjd_ref=0.0;// computed when the first slice is read
   // over ride defaults by parameters given by the user
   if(svuserInp(uparfile,user)) return -1;
   if(user->all_chan) user->channels=corr->daspar.channels;
@@ -794,7 +794,12 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile){
 }
 /*
   The start of each visibility slice contains a time_val struct which needs
-  to be converted to IST, this is one of the functions used for that.
+  to be converted to IST, this is one of the functions used for that. Although
+  it says unix_time_to_ist, the f_sec carries the fractional seconds since
+  midnight of 01/01/1970, so the returned time is accurate to microseconds
+  (i.e. the accuracy of timeval).
+
+  jnc
 */
 double unix_time_to_ist(time_t unix_time, double f_sec){
   int    hh,mm,ss;
@@ -805,6 +810,29 @@ double unix_time_to_ist(time_t unix_time, double f_sec){
   sscanf(date,"%*s %*s %*s %d:%d:%d %*s",&hh,&mm,&ss);
   t_ist=hh*3600+mm*60+ss+f_sec; //IST seconds
   return t_ist;
+}
+/*
+  computes the reference mjd for the visibility files. The reference mjd is
+  the mjd at the earliest midnight IST prior to the timestamp on the first
+  slice of the first raw visibility files (which is stored in
+  recfile->mjd_ref).
+
+  While computing uvw coordinates etc. the slice time is converted to IST,
+  i.e. the time interval since midnight, so converting this to a fractional
+  day and adding it to mjd_ref would give the mjd of the visibilty.
+  
+  jnc may 2025
+  
+*/
+double unix_time_to_mjd_ref(time_t unix_time, double f_sec){
+  double jd;
+  double mjd_ref;
+
+  jd=(unix_time+f_sec)/86400.0+2440588.0; //add JD on 01/01/1970
+  mjd_ref=(int)floor(jd)-2400000.5;// mjd at midnight UTC
+  mjd_ref=mjd_ref+(5.5*3600.0)/86400.0; // mjd at midnight IST
+  
+  return mjd_ref;
 }
 /*
   The user structure contains the path to all the raw visibility files
@@ -839,6 +867,11 @@ int open_file(SvSelectionType *user,int idx,char *fname,FILE **fp){
   needed.
 
   jnc apr 2025
+
+  added computation of mjd_ref for the visibility file,see
+  unix_time_to_mjd_ref() for more details.
+
+  jnc may 2025
 */
 double get_slice_time(SvSelectionType *user, int idx, int slice){
   RecFileParType *rfile=&user->recfile;
@@ -874,14 +907,24 @@ double get_slice_time(SvSelectionType *user, int idx, int slice){
   start_time+=idx*t_slice;//timestamp marks start for for file[0]!
   if(slice==0){
     rfile->t_start[idx]=start_time;
+    if(idx==0){//set the mjd_ref for the visibility files
+      rfile->mjd_ref=unix_time_to_mjd_ref(unix_time,tv.tv_usec/1.0e6);
+      fprintf(user->lfp,"MJD_REF for visibility files = %20.10f\n",
+	      rfile->mjd_ref);
+    }
   }else{
-    // check that timestamp matches to a small fraction of integration time
-    tiny=(rfile->t_slice/rfile->rec_per_slice)*1.0e-3;
-    if(fabs(start_time-(rfile->t_start[idx]+slice*slice_interval))> tiny){
-      fprintf(stderr,"File %d Slice %d TimeStamp Error!\n",idx,slice);
-      fprintf(stderr,"Expected %14.6f (sec) Got %14.6f (sec)\n",
-	      rfile->t_start[idx]+slice*slice_interval,start_time);
-
+    if(start_time<rfile->t_start[idx]){// data crosses midnight
+      start_time=start_time+86400.0;// add 1 day, since time is from mjd_ref
+      fprintf(user->lfp,"Midnight Crossed idx %d slice %d\n",idx,slice);
+    }
+    else{//check that timestamp matches to a small fraction of integration time
+      tiny=(rfile->t_slice/rfile->rec_per_slice)*1.0e-3;
+      if(fabs(start_time-(rfile->t_start[idx]+slice*slice_interval))> tiny){
+	fprintf(stderr,"File %d Slice %d TimeStamp Error!\n",idx,slice);
+	fprintf(stderr,"Expected %14.6f (sec) Got %14.6f (sec)\n",
+		rfile->t_start[idx]+slice*slice_interval,start_time);
+	exit(1);
+      }
     }
   }
   fclose(fp);
@@ -1191,7 +1234,7 @@ int simulate_visibilities(SvSelectionType *user, double tm, char *rbuf,
     uvw[i].by = user->corr->antenna[i].by ;
     uvw[i].bz = user->corr->antenna[i].bz ;
   }
-  svgetUvw(tm,corr->daspar.mjd_ref,source,uvw); //units metres/C 
+  svgetUvw(tm,user->recfile.mjd_ref,source,uvw); //units metres/C 
 
   //compute l,m,n coordinates from AIPS Memo27 Griesen(83,94) SIN projection
   dec=burst->dec_app;
@@ -1541,8 +1584,8 @@ int make_onechan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
     fprintf(user->lfp,"COPY:File %d Slice %d Rec %d Time %12.6f Chan %d - %d\n",
 	    idx,slice,r,tm,c0,c1);
   if(c0<0 || c0>=channels) return 0; // record does not contain burst
-  svgetUvw(tm,corr->daspar.mjd_ref,source,uvw);
-  JD = corr->daspar.mjd_ref + 2400000.5 + tm/86400 ;
+  svgetUvw(tm,user->recfile.mjd_ref,source,uvw);
+  JD = user->recfile.mjd_ref + 2400000.5 + tm/86400 ;
   date1 = (int) JD ;
   date2 = JD - date1+user->iatutc/86400 ; //CHECK IATUTC
   for(b=0;b<baselines;b+=vispar->vis_sets){//vis_sets==2
@@ -1586,8 +1629,10 @@ int make_onechan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
       uvwpar->v = (uvw[ant1].v-uvw[ant0].v)*(freq/freq0);
       uvwpar->w = (uvw[ant1].w-uvw[ant0].w)*(freq/freq0);
       epoch=2000.0 + (corr->daspar.mjd_ref - 51544.5)/365.25 ;
-      //rotate from date (epoch) coordinates to standard (epoch1==J2000 by
-      //default)
+      //rotate from date (epoch) coordinates to standard (default epoch1==J2000)
+      //the correct reference time here is the time the apparent coordinates
+      // refer too, hence corr->daspar.mjd_ref (in principle should also add
+      // the scan start time here, but the effect is small).
       if(epoch1<0.0)epoch1=epoch;
       prenut(uvwpar,corr->daspar.mjd_ref,source->ra_app,source->dec_app,
 	     epoch1);
@@ -1731,8 +1776,8 @@ int make_allchan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
   recl=corr->daspar.baselines*corr->daspar.channels*sizeof(float);
   c0=bpass->start_chan[r];c1=bpass->end_chan[r];
   rbuf1=rbuf+r*recl;
-  svgetUvw(tm,corr->daspar.mjd_ref,source,uvw);
-  JD = corr->daspar.mjd_ref + 2400000.5 + tm/86400.0;
+  svgetUvw(tm,user->recfile.mjd_ref,source,uvw);
+  JD = user->recfile.mjd_ref + 2400000.5 + tm/86400.0;
   date1 = (int) JD ;
   date2 = JD - date1+user->iatutc/86400 ; //CHECK IATUTC
 
@@ -1770,8 +1815,10 @@ int make_allchan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
     uvwpar->v = (uvw[ant1].v-uvw[ant0].v);
     uvwpar->w = (uvw[ant1].w-uvw[ant0].w);
     epoch=2000.0 + (corr->daspar.mjd_ref - 51544.5)/365.25 ;
-    //rotate from date (epoch) coordinates to standard (epoch1==J2000 by
-    //default)
+    //rotate from date (epoch) coordinates to standard (default epoch1==J2000)
+    //the correct reference time here is the time the apparent coordinates
+    // refer too, hence corr->daspar.mjd_ref (in principle should also add
+    // the scan start time here, but the effect is small).
     if(epoch1<0.0)epoch1=epoch;
     prenut(uvwpar,corr->daspar.mjd_ref,source->ra_app,source->dec_app,
 	   epoch1);
@@ -1994,8 +2041,8 @@ int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
   //set the timestamp to the middle of the slice 
   tm= rfile->t_start[idx]+slice*rfile->slice_interval;
   tm+=user->timestamp_off+rec_per_slice*(integ/2); // middle of the slice
-  svgetUvw(tm,corr->daspar.mjd_ref,source,uvw);
-  JD = corr->daspar.mjd_ref + 2400000.5 + tm/86400.0;
+  svgetUvw(tm,user->recfile.mjd_ref,source,uvw);
+  JD = user->recfile.mjd_ref + 2400000.5 + tm/86400.0;
   date1 = (int) JD ;
   date2 = JD - date1+user->iatutc/86400 ; //CHECK IATUTC
 
@@ -2010,10 +2057,11 @@ int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
 
   // convert selected data into random groups
   recl=corr->daspar.baselines*corr->daspar.channels*sizeof(float);
-  flagged=0;
+  //flagged=0;
 
   // average over records and channels, the flagged count will not be
   // correct for multi-threaded computation
+#pragma omp parallel for num_threads(user->num_threads) private(b,off,uvwpar,out,b1,med,mad,c,n,c1,r,in,re,im,amp)
   for(b=0;b<baselines;b+=stokes){//(stokes=2==vispar->vis_sets)
     VisInfoType *vinfo=vispar->visinfo;
     int ant0=vinfo[b].ant0,ant1=vinfo[b].ant1; //same for all base in set
@@ -2023,7 +2071,7 @@ int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
     for(b1=b;b1<b+stokes;b1++){//all baselines in group
       if(user->do_flag)
 	if(approx_stats(rbuf,vinfo[b1].off,recl,selvis,SampleSize,&med,&mad)<0)
-	  return -1;
+	  exit(-1);
       for(c=0;c<corr->daspar.channels;c+=nchav){
 	out->r=out->i=0.0;out->wt=-1.0;//default flagged
 	for(n=0,c1=c;c1<c+nchav;c1++){//average over channels and records
@@ -2039,7 +2087,7 @@ int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
 	    }
 	  }
 	}
-	flagged+=(nchav*rec_per_slice-n);
+	//flagged+=(nchav*rec_per_slice-n);
 	if(n>0){out->r/=n;out->i/=n;out->wt=(1.0*n)/(nchav*rec_per_slice);}
 	if(!vinfo[b1].drop) out->wt=1.0;
 	if(vinfo[b1].flip)out->i=-out->i;
@@ -2051,6 +2099,9 @@ int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
     uvwpar->w = (uvw[ant1].w-uvw[ant0].w);
     epoch=2000.0 + (corr->daspar.mjd_ref - 51544.5)/365.25 ;
     //rotate from date (epoch) coordinates to standard (default epoch1==J2000)
+    //the correct reference time here is the time the apparent coordinates
+    // refer too, hence corr->daspar.mjd_ref (in principle should also add
+    // the scan start time here, but the effect is small).
     if(epoch1<0.0)epoch1=epoch;
     prenut(uvwpar,corr->daspar.mjd_ref,source->ra_app,source->dec_app,
 	   epoch1);

@@ -1,6 +1,5 @@
-JNC 15/May/25
-Added option to copy all of the data, regardless of where the burst signal is, flipped the sign of the visibilities to match test observations of offset sources, minor changes in parsing of svfits_par.txt file, some plotting programs. Added some documentation in the SVFITS.md markdown file.
-
+JNC 20/May/25
+Working on getting the coordinates correct using offset observations B0329+54. Part of the problem was traced to the fact that the mjd_ref for the vispar file is different than the mjd_ref for the observation (unlike the case for lta files). Fixed this but there still may be more problems. Also parallelized the computations for ALL_DATA, which has speeded things up significantly.
 
 Some details on the files in this commit are given below.
 
@@ -26,12 +25,12 @@ stats.c -- No change
 
 SVFITS.md  markdown file with some user docummentation
 
-svfits.c -- added a mode where all of the input data is converted to UVFITS regardless of where the burst signal lies. 
+svfits.c -- printing out the version to 2 decimal digits now.
 
 svfits_par.txt -- updated to include the parameters to allow for all of the data to be converted to fits (ALL_DATA,NCHAV)
 
 svio.h -- small changes corresponding to the new options in svfits.
 
-svsubs.c -- increased the maximum size of the command line option parameters, and also flipped the visibility sign to match the observed position of the offset source in test observations.
+svsubs.c -- work on correcting the mjd_ref, this has improved the coordinate match for offset sources, but there may still be a residual error. Also parallelized the computations in the ALL_DATA case.
 
 utils.c -- No change

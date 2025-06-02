@@ -92,6 +92,7 @@ typedef struct rec_file_par_type{
   double  t_slice;             // slice duration (sec)
   double  slice_interval;      // interval between 2 slices in file (sec)
   int     rec_per_slice;       // number of lta records per slice
+  double  mjd_ref;             // the reference mjd for the raw visibility file
 } RecFileParType;
   
 typedef struct burst_par_type{

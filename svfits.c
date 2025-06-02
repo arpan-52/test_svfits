@@ -512,7 +512,7 @@ int init_hdr( fitsfile *fptr, SvSelectionType *user, int pcount, int *status,
   //would need to do a uvsrt or equivalent to get the data in time-baseline
   //order
   if ( ffphis(fptr,"AIPS SORT ORDER = 'TB' ",status) ) return *status ;
-  sprintf(history,"Created by SVFITS Version %5.2f",svVersion());
+  sprintf(history,"Created by SVFITS Version %5.3f",svVersion());
   if ( ffphis(fptr,history,status) ) return *status ;
   sprintf(history,"GMRT CORR Version %s",corr->version);
   if ( ffphis(fptr,history,status) ) return *status ;
