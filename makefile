@@ -15,7 +15,7 @@ ALL= svfits
 all:$(ALL)
 
 SVOBJ=svfits.o svsubs.o utils.o stats.o
-svfits:$(SVOBJ) svio.h  newcorr.h
+svfits:$(SVOBJ) svio.h  gmrt_newcorr.h
 	$(CC) $(CFLAGS) -o svfits $(SVOBJ) $(STATIC_LIBS) $(CLIBS)  -lm -lc
 clean :
 	/bin/rm *.o $(ALL)

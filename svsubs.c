@@ -12,7 +12,7 @@
 #include"novascon.h"
 #include"solarsystem.h"
 #include"nutation.h"
-#include "newcorr.h"
+#include "gmrt_newcorr.h"
 #include "svio.h"
 
 enum{Hdrlen=81920,Len=80};
@@ -21,22 +21,24 @@ const char cont_char = '*', begin_char = '{', end_char = '}';
 
 // The enum and the char array need to match exactly, and are used to
 // parse the input parameter file.
-enum {NFiles,Path,InputFile,FitsFile,AntMask,AllChan,AllData,NCHAV,IATUTC,Epoch,
-      ObsMjd,FreqSet,CoordType,RaApp,DecApp,RaMean,DecMean,StokesType,BurstName,
-      BurstMJD,BurstTime,BurstDT,BurstIntWd,BurstWd,BurstDM,BurstDDM,BurstFreq,
-      BurstBmId,BurstRa,BurstDec,UpdateBurst,DoFlag,Thresh,DoBand,DoBase,
-      PostCorr,DropCsq,NumThreads,Recentre,SvVars} SvVarType ;
+enum {NFiles,Path,InputFile,HaveIdx,NSlice,FitsFile,AntMask,AllChan,AllData,
+      NCHAV,IATUTC,Epoch,ObsMjd,FreqSet,CoordType,RaApp,DecApp,RaMean,DecMean,
+      StokesType,BurstName,BurstMJD,BurstTime,BurstDT,BurstIntWd,BurstWd,
+      BurstDM,BurstDDM,BurstFreq,BurstBmId,BurstRa,BurstDec,UpdateBurst,
+      DoFlag,Thresh,DoBand,DoBase,PostCorr,DropCsq,NumThreads,Recentre,
+      SvVars} SvVarType ;
 char *SvVarname[SvVars] =
-  {"NFILE","PATH","INPUT","FITS","ANTMASK","ALL_CHAN","ALL_DATA","NCHAV",
-   "IATUTC","EPOCH","OBS_MJD","FREQ_SET","COORD_TYPE","RA_APP","DEC_APP",
-   "RA_MEAN","DEC_MEAN","STOKES_TYPE","BURST_NAME","BURST_MJD","BURST_TIME",
-   "BURST_DT","BURST_INTWD","BURST_WIDTH","BURST_DM","BURST_DDM","BURST_FREQ",
-   "BURST_BM_ID","BURST_RA","BURST_DEC","UPDATE_BURST","DO_FLAG","THRESH",
-   "DO_BAND","DO_BASE","POST_CORR","DROP_CSQ","NUM_THREADS","RECENTRE"};
+  {"NFILE","PATH","INPUT","HAVE_IDX","N_SLICE","FITS","ANTMASK","ALL_CHAN",
+   "ALL_DATA","NCHAV","IATUTC","EPOCH","OBS_MJD","FREQ_SET","COORD_TYPE",
+   "RA_APP","DEC_APP","RA_MEAN","DEC_MEAN","STOKES_TYPE","BURST_NAME",
+   "BURST_MJD","BURST_TIME","BURST_DT","BURST_INTWD","BURST_WIDTH","BURST_DM",
+   "BURST_DDM","BURST_FREQ","BURST_BM_ID","BURST_RA","BURST_DEC","UPDATE_BURST",
+   "DO_FLAG","THRESH","DO_BAND","DO_BASE","POST_CORR","DROP_CSQ",
+   "NUM_THREADS","RECENTRE"};
 static double K0=4.15e-3; // DM constant in seconds
 
 float svVersion(void){//sets the version number for log and history
-  return 0.953;
+  return 0.960;
 }
 
 /*
@@ -88,6 +90,8 @@ int svuserInp (char *filename, SvSelectionType *user ){
 		      i++;
 		     }
 		     break;
+      case HaveIdx  :sscanf(p,"%d",&user->recfile.have_idx);break;
+      case NSlice   :sscanf(p,"%d",&user->recfile.n_slice);break;
       case AntMask  :sscanf(p,"%u",&user->antmask);break;
       case AllChan  :sscanf(p,"%d",&user->all_chan);break;
       case AllData  :sscanf(p,"%d",&user->all_data);break;
@@ -154,8 +158,7 @@ int svuserInp (char *filename, SvSelectionType *user ){
    corrected the offset to reflect that there is no timestamp at the start
    of every record. Instead there is a timestamp at the start of every
    rec_per_slice records. The timestamp is read separately and so does not
-   need to be reflected in the offsets.
-   here.
+   need to be reflected in the offset here.
 */
 int init_vispar(SvSelectionType *user){
 
@@ -191,7 +194,7 @@ int init_vispar(SvSelectionType *user){
 	  a1=base[bs].samp[1].ant_id;b1=base[bs].samp[1].band;
 	  if((b0!=band) ||(b1!=band)) continue;
 	  if(ant0==a0 && ant1==a1){
-	    visinfo[bs1].flip=1;
+	    visinfo[bs1].flip=0;
 	    visinfo[bs1].ant0=ant0;visinfo[bs1].ant1=ant1;
 	    visinfo[bs1].band0=b0;visinfo[bs1].band1=b1;
 	    visinfo[bs1].drop=0; 
@@ -199,7 +202,7 @@ int init_vispar(SvSelectionType *user){
 	    bs1++;break;
 	  }else{
 	    if(ant0==a1 && ant1==a0){
-	      visinfo[bs1].flip=0;
+	      visinfo[bs1].flip=1;
 	      visinfo[bs1].ant0=ant0;visinfo[bs1].ant1=ant1;
 	      visinfo[bs1].band0=b0;visinfo[bs1].band1=b1;
 	      visinfo[bs1].drop=0; 
@@ -457,7 +460,7 @@ int init_corr(SvSelectionType *user, char *hdrfile){
   corrpar->channels=4096; 
   corrpar->sta=1; // adhoc  does not make a different to FITS conversion
   // duration of 1 sta in sec(changed for SPOTLIGHT)
-  corrpar->statime=2.0*corrpar->channels*corrpar->sta/corrpar->clock;
+  user->statime=2.0*corrpar->channels*corrpar->sta/corrpar->clock;
   corrpar->f_step=corrpar->clock/(corrpar->channels*2);// +ve 
 
   // default data acquisition parameters - (in principle not all correlator
@@ -565,7 +568,7 @@ int update_burst(SvSelectionType *user){
 
   jnc march 2025
 */
-int init_user(SvSelectionType *user, char *uparfile, char *antfile){
+int init_user(SvSelectionType *user, char *uparfile, char *antfile, char *bhdrfile){
   VisParType       *vispar=&user->vispar;
   CorrType         *corr=user->corr;
   CorrParType      *corrpar=&corr->corrpar;
@@ -582,7 +585,7 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile){
   { fprintf(stderr,"Cannot open svfits.log\n"); return -1;}
 
   //set timestamp to the middle of the integration
-  user->timestamp_off=0.5*daspar->lta*corrpar->statime;
+  user->timestamp_off=0.5*daspar->lta*user->statime;
   user->iatutc = 37 ;  // default
   user->epoch = 2000.0;// default is J2000 coordinates
   user->stokes=2; // RR, LL by default
@@ -654,21 +657,37 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile){
   burst->dec_app=source->dec_app;
   user->recentre=0; // do not recentre visibilties to burst beam coordinates
   /* default parameteters of the raw data files */
-  rfile->nfiles=16;
+  rfile->have_idx=1;// file header includes the index of the file
+  rfile->nfiles=16; // has to be 16 here so that slice_interval etc. is correct
   strcpy(rfile->path,".");
   for(i=0;i<rfile->nfiles;i++)
     sprintf(rfile->fname[i],"%d.dat",i);// NEED TO UPDATE TO CORRECT CONVENTION
   rfile->rec_per_slice=50; // 50 lta records per slice
   // time duration (sec) of each slice
-  rfile->t_slice=rfile->rec_per_slice*daspar->lta*corrpar->statime;
+  rfile->t_slice=rfile->rec_per_slice*daspar->lta*user->statime;
   // time interval (sec) between two successive slices
   rfile->slice_interval=rfile->nfiles*rfile->t_slice;
   rfile->t_start[0]=0;
   for(i=1;i<rfile->nfiles;i++) // start time for data in file
     rfile->t_start[i]=rfile->t_start[i-1]+rfile->t_slice;
   rfile->mjd_ref=0.0;// computed when the first slice is read
+  rfile->n_slice=-1;// process all slices (only used when all_data=1)
 
-  // over ride defaults by parameters given by the user
+  //override defaults with actual parameter settings in the binary header
+  //file, if specified
+  if(strlen(bhdrfile)){
+    FILE *fp;
+    if((fp=fopen(bhdrfile,"rb"))==NULL)
+      {fprintf(stderr,"Unable to open %s\n",bhdrfile); return -1;}
+    if((fread(user->corr,sizeof(CorrType),1,fp))!=1)
+      {fprintf(stderr,"Error reading corr from %s\n",bhdrfile); return -1;}
+    if((fread(user->srec->scan,sizeof(ScanInfoType),1,fp))!=1)
+      {fprintf(stderr,"Error reading scan from %s\n",bhdrfile); return -1;}
+    // WORK In PROGRESS!! The appropriate parameters are not filled in the
+    // binary header. Better to wait till that dust settles before getting
+    // into this. JNC 14/June/25
+  }
+  // over ride earlier settings by parameters given by the user
   if(svuserInp(uparfile,user)) return -1;
   if(user->all_chan) user->channels=corr->daspar.channels;
   if(user->all_data){
@@ -721,15 +740,19 @@ double unix_time_to_ist(time_t unix_time, double f_sec){
   day and adding it to mjd_ref would give the mjd of the visibilty.
   
   jnc may 2025
+
+  fixed bugs in the computation of jd as well as the computation of mjd
+  at midnight IST
+  jnc 14june 2025
   
 */
 double unix_time_to_mjd_ref(time_t unix_time, double f_sec){
   double jd;
   double mjd_ref;
 
-  jd=(unix_time+f_sec)/86400.0+2440588.0; //add JD on 01/01/1970
-  mjd_ref=(int)floor(jd)-2400000.5;// mjd at midnight UTC
-  mjd_ref=mjd_ref+(5.5*3600.0)/86400.0; // mjd at midnight IST
+  jd=(unix_time+f_sec)/86400.0+2440587.5; //add JD on 01/01/1970
+  mjd_ref=floor(jd-2400000.5);// mjd at midnight UTC
+  mjd_ref=mjd_ref-(5.5*3600.0)/86400.0; // mjd at midnight IST
   
   return mjd_ref;
 }
@@ -765,13 +788,15 @@ int open_file(SvSelectionType *user,int idx,char *fname,FILE **fp){
   Inputs are the user structure, idx is the index of the file (in the filename
   array) to be read, and slice is the slice number for which the time is
   needed.
-
   jnc apr 2025
 
   added computation of mjd_ref for the visibility file,see
   unix_time_to_mjd_ref() for more details.
-
   jnc may 2025
+
+  idx is now embedded in the file. Modified the code to read it (if
+  user->recfile.have_idx is set) and ignore the value supplied to the function
+  
 */
 double get_slice_time(SvSelectionType *user, int idx, int slice){
   RecFileParType *rfile=&user->recfile;
@@ -779,6 +804,8 @@ double get_slice_time(SvSelectionType *user, int idx, int slice){
   int             rec_per_slice=rfile->rec_per_slice;
   double          t_slice=rfile->t_slice;
   unsigned long   timesize=sizeof(struct timeval);
+  unsigned long   hdrsize;
+  int             have_idx=user->recfile.have_idx;
   unsigned long   recl,off;
   double          start_time;  
   time_t          unix_time;
@@ -792,15 +819,28 @@ double get_slice_time(SvSelectionType *user, int idx, int slice){
     return start_time;
   }
 
+  //new format includes the file index in the header
+  if(have_idx)hdrsize=timesize+sizeof(int);
+  else hdrsize=timesize;
+  
   // get the start time of the file
   if(open_file(user,idx,fname,&fp)) return -1;
   recl=user->corr->daspar.baselines*user->corr->daspar.channels*sizeof(float);
-  off=slice*(timesize+recl*rec_per_slice);
+  off=slice*(hdrsize+recl*rec_per_slice);
   fseek(fp,off,SEEK_SET);
-  if(fread(&tv,timesize,1,fp) != 1){
-    fprintf(stderr,"Cannot read the starting time in file %s!\n",
-	    rfile->fname[idx]);
-    return -1;
+  if(fread(&tv,timesize,1,fp) != 1)
+    {fprintf(stderr,"TimeStmp ReadErr for %s!\n", rfile->fname[idx]);return -1;}
+  // read the index to use for timestamp from the file itself. Ignore value
+  // supplied while calling the program
+  if(have_idx){
+    int idx0=idx;
+    if(fread(&idx,sizeof(int),1,fp) != 1)
+      {fprintf(stderr,"Idx ReadErr for %s!\n", rfile->fname[idx0]);return -1;}
+    idx=idx-1;
+    if(idx < 0 || idx >= rfile->nfiles){
+      fprintf(stderr,"Idx %d RangeErr for %s!\n",idx,rfile->fname[idx0]);
+      return -1;
+    }
   }
   unix_time=tv.tv_sec; // seconds;
   start_time=unix_time_to_ist(unix_time,tv.tv_usec/1.0e6);// IST
@@ -860,7 +900,7 @@ int get_rec_num(SvSelectionType *user, int idx){
   double          slice_interval=rfile->slice_interval;
   double          t_slice=rfile->t_slice;
   int             rec_per_slice=rfile->rec_per_slice;
-  double          integ=corr->daspar.lta*corr->corrpar.statime;
+  double          integ=corr->daspar.lta*user->statime;
   double          freq=scan->source.freq[0]/1.0e9; //GHz (first chan)
   double          cw=scan->source.ch_width/1.0e9;//GHz (positive)
   double          t_burst,t_rec,fh,fl;
@@ -914,7 +954,7 @@ int get_file_order(SvSelectionType *user, int *order){
   double          slice_interval=rfile->slice_interval;
   double          t_slice=rfile->t_slice;
   int             rec_per_slice=rfile->rec_per_slice;
-  double          integ=corr->daspar.lta*corr->corrpar.statime;
+  double          integ=corr->daspar.lta*user->statime;
   int             idx,i,j,k,l,index[MaxRecFiles],nfiles;
   double          b_start[MaxRecFiles],min,tmp;
 
@@ -978,17 +1018,23 @@ int get_file_order(SvSelectionType *user, int *order){
   records) at a time.
 
    jnc 15/mar/25
+
+   changed the input parameters to just user, since statime is now inside
+   user and not corrpar.
 */
-int get_nchan(BurstParType *burst,CorrType *corr, ScanInfoType *scan){
-  double DM=burst->DM;
-  double fb=burst->f/1.0e9; //GHz
-  double tb=0; // burst time set to 0, ok since we are just counting channels
-  double wd=burst->int_wd;
-  double freq=scan->source.freq[0]/1.0e9;//GHz (first chan)
-  double cw=scan->source.ch_width/1.0e9; //GHz (positive)
-  double integ=corr->daspar.lta*corr->corrpar.statime;
-  int    cs,ce,nc,nrec;
-  double tr1,tr2,fs,fe,fn,fh;
+int get_nchan(SvSelectionType *user){
+  BurstParType *burst=&user->burst;
+  CorrType     *corr=user->corr;
+  ScanInfoType *scan=user->srec->scan;
+  double        DM=burst->DM;
+  double        fb=burst->f/1.0e9; //GHz
+  double        tb=0; // bursttime=0, ok since we are just counting channels
+  double        wd=burst->int_wd;
+  double        freq=scan->source.freq[0]/1.0e9;//GHz (first chan)
+  double        cw=scan->source.ch_width/1.0e9; //GHz (positive)
+  double        integ=corr->daspar.lta*user->statime;
+  int           cs,ce,nc,nrec;
+  double        tr1,tr2,fs,fe,fn,fh;
   
   if(scan->source.net_sign[0]>0)fh=freq+corr->daspar.channels*cw;
   else fh=freq;
@@ -1016,18 +1062,25 @@ int get_nchan(BurstParType *burst,CorrType *corr, ScanInfoType *scan){
   copied for conversion into FITS.
 
   jnc 15/mar/25
+
+  changed the input parameters to just user, since statime is now inside
+  user and not corrpar.
+
+  jnc june 2025
 */
-int get_chan_num(double trec,BurstParType *burst,CorrType *corr,
-		 ScanInfoType *scan,int *cs,int *ce){
-  double DM=burst->DM;
-  double tb=burst->t;
-  double fb=burst->f/1.0e9; //GHz
-  double wd=burst->int_wd;
-  double freq=scan->source.freq[0]/1.0e9;//GHz (first chan)
-  double cw=scan->source.ch_width/1.0e9; //GHz (positive)
-  double integ=corr->daspar.lta*corr->corrpar.statime;
-  int    c0,c1,c;
-  double tr1,tr2,fs,fe,fn,fh,df;
+int get_chan_num(double trec,SvSelectionType *user,int *cs,int *ce){
+  BurstParType *burst=&user->burst;
+  CorrType     *corr=user->corr;
+  ScanInfoType *scan=user->srec->scan;
+  double        DM=burst->DM;
+  double        tb=burst->t;
+  double        fb=burst->f/1.0e9; //GHz
+  double        wd=burst->int_wd;
+  double        freq=scan->source.freq[0]/1.0e9;//GHz (first chan)
+  double        cw=scan->source.ch_width/1.0e9; //GHz (positive)
+  double        integ=corr->daspar.lta*user->statime;
+  int           c0,c1,c;
+  double        tr1,tr2,fs,fe,fn,fh,df;
   
   if(scan->source.net_sign[0]>0)fh=freq+corr->daspar.channels*cw;
   else fh=freq;
@@ -1107,13 +1160,10 @@ int prenut_uvw(SvSelectionType *user,BaseUvwType *uvw, double mjd){
   jd1=2400000.5+mjd; 
   for(k=0;k<MAX_ANTS;k++){
     p1[0]=uvw[k].u; p1[1]=uvw[k].v; p1[2]=uvw[k].w;
-    MAT_VEC(user->i2eapp,p1,p0);// rotate to equitorial frame
+    MAT_VEC(user->i2eapp,p1,p0);// rotate from UVW to equitorial frame
     nutation(jd1,direction,accuracy,p0,p1);//undo nutation
-    if(precession(jd1,p1,jd0,p0)){// undo precession (i.e. now J2000)
-      fprintf(stderr,"Precession requires one epoch to be 2000.0!\n");
-      return -1;
-    }
-    MAT_VEC(user->emean2i,p0,p1);// rotate to interferometric frame
+    precession(jd1,p1,jd0,p0);// undo precession (i.e. now J2000)
+    MAT_VEC(user->emean2i,p0,p1);// rotate from equitorial to UVW frame
     uvw[k].u=p1[0]; uvw[k].v=p1[1]; uvw[k].w=p1[2];
   }
 
@@ -1135,7 +1185,11 @@ int prenut_uvw(SvSelectionType *user,BaseUvwType *uvw, double mjd){
   latter is meant for use in make_postcorr_beam(), where no rotation to J2000
   is done.
 
-  jnc man 2025
+  jnc may 2025
+
+  fixed a inversion in the matrix multiplication order
+
+  jnc 14june 2025
 */
 #define MAT_MAT(A,B,C){for(i1=0;i1<3;i1++){for(j1=0;j1<3;j1++){for(C[i1][j1]=0,k1=0;k1<3;k1++){C[i1][j1]+=A[i1][k1]*B[k1][j1];}}}}
 void init_mat(SvSelectionType *user){
@@ -1162,7 +1216,7 @@ void init_mat(SvSelectionType *user){
   m1[0][0]=cos(t); m1[0][1]=-sin(t); m1[0][2]=0.0;
   m1[1][0]=sin(t); m1[1][1]= cos(t); m1[1][2]=0.0;
   m1[2][0]=0.0;    m1[2][1]= 0.0;    m1[2][2]=1.0;
-  MAT_MAT(m0,m1,user->i2eapp); // net rotation
+  MAT_MAT(m1,m0,user->i2eapp); // net rotation
 
   //matrix to rotate from J2000 equitorial axis to interferometric axis
   /* rotate from equitorial plane to source(dec) (NB indices transposed)*/
@@ -1175,7 +1229,7 @@ void init_mat(SvSelectionType *user){
   m1[0][0]=cos(t); m1[1][0]=-sin(t); m1[2][0]=0.0;
   m1[0][1]=sin(t); m1[1][1]= cos(t); m1[2][1]=0.0;
   m1[0][2]=0.0;    m1[1][2]= 0.0;    m1[2][2]=1.0;
-  MAT_MAT(m1,m0,user->emean2i); //net rotation
+  MAT_MAT(m0,m1,user->emean2i); //net rotation
 
   if(!user->recentre) return;
   
@@ -1198,7 +1252,7 @@ void init_mat(SvSelectionType *user){
   user->lmn[1]=sin(d1)*cos(d0)-cos(d1)*sin(d0)*cos(r1-r0);
   user->lmn[2]=sqrt(1.0-user->lmn[0]*user->lmn[0]-user->lmn[1]*user->lmn[1]);
 
-  //set up the source direction cosines in the original uvw basis at J2000.
+  //set up the source direction cosines in the original uvw basis at DATE
   // Used to correct the visibility phase in make_postcorr_beam()
   r0=source->ra_app;d0=source->dec_app;
   r1=burst->ra_app; d1=burst->dec_app;
@@ -1234,7 +1288,7 @@ void vis_recentre(SvSelectionType *user, char *visbuf, int channels, unsigned lo
   Cmplx3Type    *vis;
   int            g,c,s;
   int            i1,j1; //used in macro MAT_VEC, do *not* reuse
-  double         uvw0[3],uvw1[3],re,im,cp,sp,dphs;
+  double         uvw0[3],uvw1[3],re,im,cp,sp,dphs,dphs0;
   double        *lmn=user->lmn;
   double         freq0,freq,chwd;
 
@@ -1243,25 +1297,27 @@ void vis_recentre(SvSelectionType *user, char *visbuf, int channels, unsigned lo
   chwd=source->ch_width*source->net_sign[0];
     
   group_size=sizeof(UvwParType)+sizeof(Cmplx3Type)*stokes*channels;
-  //could parallelize this over groups
+#pragma omp parallel for num_threads(user->num_threads) private(g,uvwpar,uvw0,uvw1,vis,c,freq,dphs0,dphs,cp,sp,s,re,im)
   for(g=0;g<groups;g++){
     uvwpar=(UvwParType*)(visbuf+g*group_size);
     uvw0[0]=uvwpar->u; uvw0[1]=uvwpar->v; uvw0[2]=uvwpar->w;
+    dphs0=2.0*M_PI*(uvw0[0]*lmn[0]+uvw0[1]*lmn[1]+uvw0[2]*(lmn[2]-1.0));
     MAT_VEC(user->rmat,uvw0,uvw1); //rotate uvw vector to new phase centre
+    uvwpar->u=uvw1[0]; uvwpar->v=uvw1[1]; uvwpar->w=uvw1[2];
     vis=(Cmplx3Type*)(visbuf+g*group_size+sizeof(UvwParType));
-    for(s=0;s<stokes;s++){
-      for(c=0;c<channels;c++,vis++){
+    // correct the visibility phase for the phase centre shift
+    for(c=0;c<channels;c++){
+      freq=freq0+c*chwd;//Hz, (uvw are in sec)
+      dphs=freq*dphs0;
+      cp=cos(dphs);sp=sin(dphs);
+      for(s=0;s<stokes;s++){
 	if(vis->wt<0) continue;
-	// correct the visibility phase for the phase centre shift
-	freq=freq0+c*chwd;//Hz, (uvw are in sec)
-	dphs=freq*(uvw0[0]*lmn[0]+uvw0[1]*lmn[1]+uvw0[2]*(lmn[2]-1.0));
-	cp=cos(dphs);sp=sin(dphs);
-	re=vis->r*cp-vis->i*sp;
-	im=vis->r*sp+vis->i*cp;
+	re=vis->r*cp+vis->i*sp;
+	im=-vis->r*sp+vis->i*cp;
 	vis->r=re; vis->i=im;
+	vis++;
       }
     }
-    uvwpar->u=uvw1[0]; uvwpar->v=uvw1[1]; uvwpar->w=uvw1[2];
   }
   return;
 }
@@ -1516,7 +1572,7 @@ int make_bpass(SvSelectionType *user, char *rbuf, int idx, int slice){
   int              channels=corr->daspar.channels;//input channels
   int              baselines=user->baselines;//output baselines
   int              stokes=user->stokes;
-  double           integ=corr->daspar.lta*corr->corrpar.statime;
+  double           integ=corr->daspar.lta*user->statime;
   double           start_time=rfile->t_start[idx]+slice*rfile->slice_interval;
   unsigned long    off,recl;
   int              r,r0,r1,n,b,c,c0,c1,n_vis;
@@ -1531,7 +1587,7 @@ int make_bpass(SvSelectionType *user, char *rbuf, int idx, int slice){
   // removed the bypass of this for user->all_chan jnc 5/may/25
   for(r=0;r<rec_per_slice;r++){
     tm=start_time+r*integ;
-    get_chan_num(tm,burst,corr,scan,&c0,&c1);
+    get_chan_num(tm,user,&c0,&c1);
     bpass->start_chan[r]=c0;
     bpass->end_chan[r]=c1;
     // compute the number of random groups needed to store the data. Each
@@ -1653,6 +1709,20 @@ int read_slice(SvSelectionType *user,int idx, int slice, char *rbuf){
   if(fread(rbuf,recl,rec_per_slice,fp)!=rec_per_slice)
     {fprintf(stderr,"Error reading %s Slice %d\n",fname,slice); return -1;}
 
+  if(0){  // fill with fake data for debug JNC June 2025
+    int             r,b,c;
+    unsigned short *in;
+    int             baselines=corr->daspar.baselines;
+    int             channels=corr->daspar.channels;
+    for(r=0;r<rec_per_slice;r++){
+      for(b=0;b<baselines;b++){
+	for(c=0;c<channels;c++){
+	  in=(unsigned short*)(rbuf+r*recl+(b*channels+c)*sizeof(float));
+	  in[0]=half_to_float(c);in[1]=half_to_float(0);
+	}
+      }
+    }
+  }
   return 0;
 }
 
@@ -1681,7 +1751,7 @@ int make_onechan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
   int              date1;
   int              baselines=user->baselines;//output baselines
   int              channels=corr->daspar.channels;//input channels
-  double           integ=corr->daspar.lta*corr->corrpar.statime;
+  double           integ=corr->daspar.lta*user->statime;
   Cmplx3Type      *out;
   unsigned short  *in;
   UvwParType      *uvwpar;
@@ -1797,7 +1867,8 @@ int make_postcorr_beam(SvSelectionType *user, char *rbuf,int r, double tm,
 
   if(user->recentre){//compute per antenna phase
     for(k=0;k<MAX_ANTS;k++)
-      dphs[k]=uvw[k].u*lmn_a[0]+uvw[k].v*lmn_a[1]+uvw[k].w*(lmn_a[2]-1);
+      dphs[k]=2.0*M_PI*(uvw[k].u*lmn_a[0]+uvw[k].v*lmn_a[1]+
+			uvw[k].w*(lmn_a[2]-1));
   }else{
     for(k=0;k<MAX_ANTS;k++)dphs[k]=0.0;
   }
@@ -1806,7 +1877,7 @@ int make_postcorr_beam(SvSelectionType *user, char *rbuf,int r, double tm,
   if(!wrote_hdr){
     SourceParType *source=&user->srec->scan->source;
     double         df=source->ch_width*source->net_sign[0];//signed
-    double          integ=corr->daspar.lta*corr->corrpar.statime;
+    double          integ=corr->daspar.lta*user->statime;
     phdr.mjd=user->burst.mjd;
     phdr.int_wd=user->burst.int_wd;
     phdr.DM=user->burst.DM;
@@ -1869,6 +1940,10 @@ int make_postcorr_beam(SvSelectionType *user, char *rbuf,int r, double tm,
 
   modified to flag the channels that do not contain the burst signal
   jnc may 2025
+
+  fixed the output visibility location, earlier all channels for a given
+  stokes were contiguous, which is not as per the FITS format.
+  jnc 14june25
  */
 int make_allchan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
 		       int r, double tm, BaseUvwType *uvw,char *obuf,
@@ -1880,7 +1955,7 @@ int make_allchan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
   ScanInfoType    *scan=user->srec->scan;
   SourceParType   *source=&scan->source;
   double           epoch,epoch1=user->epoch;
-  int              c,c0,c1,b,b1;
+  int              c,c0,c1,b,b1,s;
   unsigned long    copied;
   unsigned long    recl,off;
   char            *rbuf1;
@@ -1912,14 +1987,15 @@ int make_allchan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
     VisInfoType *vinfo=vispar->visinfo;
     off=copied*group_size;
     uvwpar=(UvwParType*)(obuf+off);//uvw for this group
-    out=(Cmplx3Type*)(obuf+off+sizeof(UvwParType));//data for this group
     if(copied ==n_group){
       fprintf(stderr,"Exceeded the estimated number of groups [%d]!\n",
 	      n_group);
       return -1;
     }
     int ant0=vinfo[b].ant0,ant1=vinfo[b].ant1; //same for all base in set
-    for(b1=b;b1<b+vispar->vis_sets;b1++){
+    for(s=0,b1=b;b1<b+vispar->vis_sets;b1++,s++){
+      //output location for this group,stokes
+      out=(Cmplx3Type*)(obuf+off+sizeof(UvwParType))+s;
       // Note off_src, abp are set to (0,1) in case the user does not
       // want to do calibration
       off_src=bpass->off_src[b1];
@@ -1935,7 +2011,7 @@ int make_allchan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
 	}else{out->wt=-1.0;}
 	if(vinfo[b1].drop)out->wt=-1.0;
 	if(c<c0||c>c1) out->wt=-1.0; // flag regions outside burst
-	out++;
+	out+=vispar->vis_sets; // same as stokes
       }
     }
     uvwpar->u = (uvw[ant1].u-uvw[ant0].u);
@@ -2007,7 +2083,7 @@ int copy_vis(SvSelectionType *user, int idx, int slice,
   unsigned long    copied;
   int              r,i;
   double           tm;
-  double           integ=corr->daspar.lta*corr->corrpar.statime;
+  double           integ=corr->daspar.lta*user->statime;
   unsigned long    off,bufsize,recl,timesize=sizeof(struct timeval);
   BaseUvwType      uvw[MAX_ANTS];
   char            *rbuf1,*obuf;
@@ -2110,6 +2186,11 @@ int approx_stats(char *rbuf,unsigned int off, int recl,VisSelType *selvis,
   random groups created, -1 in case of failure.
 
   jnc may 2025
+
+  fixed the output visibility location, earlier all channels for a given
+  stokes were contiguous, which is not as per the FITS format.
+  jnc 14june25
+
 */
 int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
 	    char *outbuf){
@@ -2127,11 +2208,11 @@ int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
   int              stokes=user->stokes;
   unsigned int     group_size,flagged;
   unsigned long    n_group;
-  int              r,i,b,b1,c,c1,n;
+  int              r,i,b,b1,c,c1,n,s;
   double           tm,epoch,epoch1,JD,date2;
   int              date1;
   float            re,im,amp,med,mad;
-  double           integ=corr->daspar.lta*corr->corrpar.statime;
+  double           integ=corr->daspar.lta*user->statime;
   unsigned long    off,bufsize,recl,timesize=sizeof(struct timeval);
   BaseUvwType      uvw[MAX_ANTS];
   char            *obuf=outbuf;
@@ -2185,14 +2266,15 @@ int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
 
   // average over records and channels, the flagged count will not be
   // correct for multi-threaded computation
-#pragma omp parallel for num_threads(user->num_threads) private(b,off,uvwpar,out,b1,med,mad,c,n,c1,r,in,re,im,amp)
+#pragma omp parallel for num_threads(user->num_threads) private(b,off,uvwpar,out,b1,med,mad,c,n,s,c1,r,in,re,im,amp)
   for(b=0;b<baselines;b+=stokes){//(stokes=2==vispar->vis_sets)
     VisInfoType *vinfo=vispar->visinfo;
     int ant0=vinfo[b].ant0,ant1=vinfo[b].ant1; //same for all base in set
     off=b/stokes*group_size;
     uvwpar=(UvwParType*)(obuf+off);//uvw for this group
-    out=(Cmplx3Type*)(obuf+off+sizeof(UvwParType));//data for this group
-    for(b1=b;b1<b+stokes;b1++){//all baselines in group
+    for(s=0,b1=b;b1<b+stokes;b1++,s++){//all baselines in group(i.e. all stokes)
+      // start of output data for this stokes in this group
+      out=(Cmplx3Type*)(obuf+off+sizeof(UvwParType))+s;
       if(user->do_flag)
 	if(approx_stats(rbuf,vinfo[b1].off,recl,selvis,SampleSize,&med,&mad)<0)
 	  exit(-1);
@@ -2215,7 +2297,7 @@ int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
 	if(n>0){out->r/=n;out->i/=n;out->wt=(1.0*n)/(nchav*rec_per_slice);}
 	if(!vinfo[b1].drop) out->wt=1.0;
 	if(vinfo[b1].flip)out->i=-out->i;
-	out++;
+	out+=stokes;//RR,LL for a given channel are adjacent
       }
     }
     uvwpar->u = (uvw[ant1].u-uvw[ant0].u);

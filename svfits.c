@@ -57,6 +57,10 @@
   handling.
 
   jnc apr 2025
+
+  large number of changes to handle multiple processing options, switch from SLA  to novas C etc. Details are captured in the associated Readme files.
+
+  jnc june 2025
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,7 +74,7 @@
 #include "fitsio.h"
 #include "fitsio.h"
 #include "longnam.h"
-#include "newcorr.h"
+#include "gmrt_newcorr.h"
 #include "svio.h"
 
 static float RefFreq,ChanWidth;
@@ -691,6 +695,7 @@ int copy_allvis(SvSelectionType *user,fitsfile *fptr){
   RecFileParType *rfile=&user->recfile;
   int             rec_per_slice=rfile->rec_per_slice;
   int             baselines=user->baselines;
+  int             n_slice=user->recfile.n_slice;
   CorrType       *corr=user->corr;
   int             channels=corr->daspar.channels;
   int             stokes=user->stokes;
@@ -721,6 +726,7 @@ int copy_allvis(SvSelectionType *user,fitsfile *fptr){
   gcount=1;//FITS numbering starts from 1
   for(idx=0;idx<rfile->nfiles;idx++){
     for(slice=0;;slice++){//process data until we reach EoF
+      if(n_slice>0 && slice >= n_slice) break;
       if(read_slice(user,idx,slice,rbuf)<0) break; //Reached EoF
       if((groups=avg_vis(user,idx,slice,rbuf,visbuf))<0){
 	fprintf(stderr,"Error processing %s slice %d\n",rfile->fname[idx],
@@ -753,30 +759,33 @@ int main(int argc, char **argv)
   SvSelectionType user;
   InitHdrType    *hdr;
   SourceParType  *source;
-  char            antfile[PATHLEN],uparfile[PATHLEN];
+  char            antfile[PATHLEN],uparfile[PATHLEN],bhdrfile[PATHLEN];
   int             c;
   extern char    *optarg;
   extern int      optind,opterr;
-
+  FILE           *fp;
+  
   strcpy(antfile,"antsamp.hdr");
   strcpy(uparfile,"svfits_par.txt");
+  strcpy(bhdrfile,"");
   if(argc-1){
-    while((c=getopt(argc,argv,"a:u:h"))!=-1){
+    while((c=getopt(argc,argv,"a:b:u:h"))!=-1){
       switch(c){
-	case 'a': strncpy(antfile,optarg,PATHLEN-1); break;
-	case 'u': strncpy(uparfile,optarg,PATHLEN-1);break;
-        case 'h': // default to next case
-        case '?': fprintf(stderr,
-		  "Usage: svfits [-a AntSampFile] [-u UserParmFile]\n");
-        	  return -1;
+      case 'a': strncpy(antfile,optarg,PATHLEN-1); break;
+      case 'b': strncpy(bhdrfile,optarg,PATHLEN-1); break;
+      case 'u': strncpy(uparfile,optarg,PATHLEN-1);break;
+      case 'h': // default to next case
+      case '?': fprintf(stderr,
+			"Usage: svfits [-a AntSampFile] [-u UserParmFile]\n");
+	        return -1;
       }
     }
   }
  
-  fprintf(stdout,"     ----- SVFITS  version %.2f  -----  \n",svVersion()) ;
+  fprintf(stdout,"     ----- SVFITS  version %.4f  -----  \n",svVersion()) ;
   fprintf(stdout,"FITSIO version number = %f\n",ffvers(&version));
 
-  //need to initialize user, corr, etc over here
+  //initalize the data structures
   user.hdr=(InitHdrType*)malloc(sizeof(InitHdrType));
   hdr=user.hdr;
   hdr->scans=1;
@@ -784,7 +793,7 @@ int main(int argc, char **argv)
   user.srec->scan=(ScanInfoType *) malloc(hdr->scans*sizeof(ScanInfoType)) ;
   source=&user.srec->scan->source;
   user.corr=(CorrType*)malloc(sizeof(CorrType));
-  if(init_user(&user,uparfile,antfile)<0){return -1;}
+  if(init_user(&user,uparfile,antfile,bhdrfile)<0){return -1;}
   RefFreq   = source->freq[0];
   ChanWidth = source->ch_width*source->net_sign[0] ;
 

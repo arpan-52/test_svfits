@@ -83,6 +83,7 @@ enum{MaxRecFiles=16};
 typedef struct rec_file_par_type{
   /* information of the raw timesliced data files*/
   int     nfiles;              // total number of raw data files
+  int     have_idx;//          // format includes index if true
   char    path[PATHLEN];       // path to the raw data files
   char    fname[MaxRecFiles][LINELEN]; // names of the raw data files
   double  t_start[MaxRecFiles];// start time (IST?) of each file
@@ -93,6 +94,7 @@ typedef struct rec_file_par_type{
   double  slice_interval;      // interval between 2 slices in file (sec)
   int     rec_per_slice;       // number of lta records per slice
   double  mjd_ref;             // the reference mjd for the raw visibility file
+  int     n_slice;             // num slices to process (-1==> all)
 } RecFileParType;
   
 typedef struct burst_par_type{
@@ -121,6 +123,7 @@ typedef struct sv_selection_type
   short            stokes,sidebands,channels,sideband[2], stokes_allow[4] ;
   short            start_chan,force_app,chan_inc;
   short            stokes_type,fake_data,dum[2];
+  float            statime; //statime in corr is int and not suitable
   char             fitsfile[LINELEN] ;
   float            iatutc,fdum ;
   double           epoch,timestamp_off;
@@ -231,7 +234,8 @@ ushort  float_to_half(const float x);
 int     get_file_order(SvSelectionType *user, int *order);
 float   half_to_float(const unsigned short x);
 void    init_mat(SvSelectionType *user);
-int     init_user(SvSelectionType *user, char *fname, char *fname1);
+int     init_user(SvSelectionType *user, char *fname, char *anthdr,
+		  char *bhdrfile);
 double  lmst(double mjd);
 char   *mjd2iau_date(double mjd);
 int     read_slice(SvSelectionType *user, int idx, int slice, char *rbuf);

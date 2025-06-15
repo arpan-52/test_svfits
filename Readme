@@ -1,5 +1,6 @@
-JNC 02/June/25
-Working on getting the coordinates correct. This continues to be work in progress. The current version uses the novasc library for positional astronomy instead of the starlink sla library (which is no longer maintained). Code for rotating the visibilties to a new phase centre as well as computing the post-correlation beam after rotation to the new centre has been added. Testing is *still incomplete*
+JNC 15/June/25
+
+More testing and debugging done on the J2000 coordiates, rotation of UVW etc and this version appears to be more or less correct. Still more testing is needed, however. There may be issues related to UTC->UT1. This version also includes reading in of the binary corr and scan headers. However currently the Das pipeline appears to be filling wrong/incomplete information in these headers, so until that is resolved, one needs to seprately provide all of the meta data in the svfits_par.txt file. Will handle both the new format (where the file index is embeded) as well as the old format (without the file index) raw visibility files.
 
 Some details on the files in this commit are given below.
 
@@ -7,11 +8,19 @@ antsamp.hdr - No change
 
 fitsio.h  No change
 
+gmrt_newcorr.h replaces newcorr.h. This is to be in sync with the online version, which unfortunately started the tradition of having closely related but not identical header files for the online and offline software.
+
 longnam.h No Change
 
 makefile No change
 
-newcorr.h No change
+newcorr.h  Dropped instead we now have gmrt_newcorr.h
+
+novascon.h header file for NOVASC
+
+novas.h    header file for NOVASC
+
+nutation.h header file for NOVASC
 
 plot_flagged.py  No change
 
@@ -19,18 +28,20 @@ plot_postcorr.py No change
 
 Readme -- this file.
 
-read_rawvis.py No change
+read_rawvis.py No change. This needs to be updated to reflect the fact that the raw visibility files now have the index embeded in them.
+
+solarsystem.h Header file for NOVASC
 
 stats.c -- No change
 
-SVFITS.md  updated to reflect new/unused parameters.
+SVFITS.md  updated to reflect changes.
 
-svfits.c -- modified to force coordinates to J2000 and use novasc instead of SLA
+svfits.c -- changes associated with reading in meta-data from the binary header files (-b option) etc. The binary header is work in progress.
 
-svfits_par.txt -- updated to include RECENTRE parameter which controls whether phase centre is to be shifted.
+svfits_par.txt -- updated to include HAVE_IDX and N_SLICE options.
 
 svio.h -- small changes corresponding to the new options in svfits.
 
-svsubs.c -- continuing work on getting the coordinates correct. This version uses novasc instead of sla and also forces the coordinates to J2000 (user input is ignored). Also has an option for changing the phasecentre.
+svsubs.c -- J2000 coordinates and relocating the phase centre seem to now be more or less correct. Needs more testing. There may be issues with UTC->UT1 that need to be resolved.
 
-utils.c -- No change
+

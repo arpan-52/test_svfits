@@ -18,19 +18,25 @@ Parts of the code that do the actual conversion to random group UVFITS are modif
 
 ## Command Line options
 
--a File containing the metadata regarding the SPOTLIGHT correlator configuration parameters, sampler connections, antenna coordinates etc. (The antsamp.hdr file) It is important to confirm that the parameters in this file conform to those actually used in the observation. At the moment this confirmation has to be done manually, which is a stop gap arrangement. In future one would expect these parameters to be taken from the "corr"  data structures used by the SPOTLIGHT online software, and which should be written to disk along with the visibility files.
+***-a*** File containing the metadata regarding the SPOTLIGHT correlator configuration parameters, sampler connections, antenna coordinates etc. (The antsamp.hdr file) It is important to confirm that the parameters in this file conform to those actually used in the observation. At the moment this confirmation has to be done manually, which is a stop gap arrangement. In future one would expect these parameters to be taken from the "corr"  data structures used by the SPOTLIGHT online software, and which should be written to disk along with the visibility files.
 
--u file containing the user parameters, (default svfits_par.txt), these include the observational parameters such as the phase centre coordinates, the frequency settings etc., as well as the candidate burst parameters returned by the trigger software, as well as various processing options chosen by the user. In future one would expect the observational parameters to be taken from the "scan" structure used by the SPOTLIGHT online software, which should be written to disk along with the visibility files.
+***-b*** File containing the binary headers dumped by the DAS chain (i.e. the corr and the scan structures). The correlator set up and and observational parameters read from this file over ride the built in defaults, and are in turn over ridden by user supplied values provided by the svfits_par.txt file. The final intention is to have a minimum set of paramters read from the svfits_par.txt file (ideally only the burst related paramters and the parameters that control conversion.) **As of now however, it appears that the SPOTLIGHT binary headers are incomplete - although the -b option is available it is not advised to use it until the issue of unfilled parameters in the binary headers is resolved.**
+
+***-u*** file containing the user parameters, (default svfits_par.txt), these include the observational parameters such as the phase centre coordinates, the frequency settings etc., as well as the candidate burst parameters returned by the trigger software, as well as various processing options chosen by the user. In future one would expect the observational parameters to be taken from the "scan" structure used by the SPOTLIGHT online software, which should be written to disk along with the visibility files.
 
 ## User Supplied Parameters
 
 The general format of the user parameter file (i.e. the one specified using the -u command line option; the default is svfits_par.txt) is a set of KEYWORD VALUE pairs, which each KEYWORD and corresponding VALUE appearing on a separate line. Lines starting with an asterisk '*' indicate a comment, and are not parsed. Similarly any text following a bang '!' after the VALUE are regarded as a comment and are not parsed. For boolean parameters (e.g. **ALL_CHAN, ALL_DATA**,  0 means to not set the corresponding option, while 1 means it is set). The currently available parameters are listed below.
 
-- **NFILE** The number of 1.3ms raw visibility files to process
+- **NFILE** The number of 1.3ms raw visibility files to process. All time slice and other calculations are made assuming that there are a total of 16 files. This entry only specifies how many of those files are to be read for conversion to FITS.
 
 - **PATH**  The directory containing the raw visibility files. It is assumed that all files are in the same directory.
 
 - **INPUT**  The names of the raw visibility files. The total number of files listed here needs to match the number given in NFILE. Currently all files have identical timestamps, so **the order here is important**. It is assumed that the first file in this list contains the first time slice, the second file contains the second timeslice and so on. In future it is expected that each file will contain enough information to determine which timeslice it contains.
+
+- **HAVE_IDX** the first set of visibility dump files did not include the file index in the meta data. That meant that the file index (i.e. which in the set of 16 slices the data in this file corresponds to) had to be supplied by hand. Later (i.e. from June 2025) versions of the raw visibility files include the index in the meta-data. HAVE_IDX=0 is meant for processing historical data where the meta-data does not contain the index. The default is to assume that the file meta-data contains the index.
+
+- **N_SLICE** the number of slices of data to process from each file. This is relevant only when the **ALL_DATA** flag is set. The default is to process all slices.
 
 - **FITS** The name of the output FITS file. By default it is "TEST.FITS". **Existing files will be overwritten!**
 

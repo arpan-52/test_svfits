@@ -7,7 +7,6 @@
 # include <sys/stat.h>
 # include <sys/types.h>
 # include <time.h>
-# include "newcorr.h"
 # include "svio.h"
 
 
