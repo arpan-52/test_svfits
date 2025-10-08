@@ -4,14 +4,14 @@
 #include <stdio.h>
 
 #ifndef __NEWCORR_H__ 
-#include "newcorr.h"
+#include "gmrt_newcorr.h"
 #endif
 
 // added this for SPOTLIGHT, not clear where it was getting defined earlier
 // assume that this code will run only on 64 architecture
 #define ARCH_64BIT  
-#define PATHLEN 256
-#define LINELEN  80
+#define PATHLEN  1024
+#define LINELEN  1024
 #define MAX_REC_PER_SLICE 50  // records in a given slice
 
 typedef struct { float r, i ; } Complex ;
@@ -94,7 +94,6 @@ typedef struct rec_file_par_type{
   double  slice_interval;      // interval between 2 slices in file (sec)
   int     rec_per_slice;       // number of lta records per slice
   double  mjd_ref;             // the reference mjd for the raw visibility file
-  int     n_slice;             // num slices to process (-1==> all)
 } RecFileParType;
   
 typedef struct burst_par_type{
@@ -117,6 +116,11 @@ typedef struct bpass_type{
   short       start_chan[MAX_REC_PER_SLICE];// per rec start channel of burst
   short       end_chan[MAX_REC_PER_SLICE];  // per rec end channel of signal 
 }BpassType;
+
+typedef struct dut1_table_type { double mjd; double dut1;} DUT1TabType;
+enum{DUT1_TABSIZE=1024};
+#define DUT1_PREDICTION_BUFFER  7.0 /* WARNING ISSUED IF PREDICTION AVAILABLE*/
+                                    /* FOR FEWER THAN THESE MANY DAYS       */
 typedef struct sv_selection_type
 { int              scans, baselines , antennas ;
   unsigned int     antmask ;
@@ -153,6 +157,10 @@ typedef struct sv_selection_type
   double           rmat[3][3]; //rotation matrix for new phase centre
   double           lmn[3]; // offset coordinates - original UVW frame(J2000)
   double           lmn_a[3]; //offset coordinates - original uvw frame (app)
+  DUT1TabType      dtab[DUT1_TABSIZE];
+  int              n_dut1;
+  double  lta;                 // lta time (sec) (only when converting all data)
+  int     n_lta  ;             // num of output lta records (-1==> all)
 } SvSelectionType ;
 
 // various structures used while making FITS file tables
@@ -221,21 +229,21 @@ typedef struct
 
 typedef unsigned short ushort;
 
-void app2j2000(double ra_app,double dec_app, double mjd, double *ra,
-	       double *dec);
 int     copy_vis(SvSelectionType *user, int idx, int slice,
-		   int start_rec, int n_rec,char *rbuf,char **outbuf);
-int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
-	    char *outbuf);
+		 int start_rec, int n_rec,char *rbuf,char **outbuf);
+int     avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
+		char *outbuf);
 int     clip(char *visbuf, SvSelectionType *user, int idx, int slice,
 	     int groups);
 int     fake_sel_chans(SvSelectionType *user, int idx, char **buf,int *restart);
 ushort  float_to_half(const float x);
 int     get_file_order(SvSelectionType *user, int *order);
+double  get_ha(SvSelectionType *user, double tm);
 float   half_to_float(const unsigned short x);
+int     init_dut1tab(SvSelectionType *user, char *bulletinA);
 void    init_mat(SvSelectionType *user);
 int     init_user(SvSelectionType *user, char *fname, char *anthdr,
-		  char *bhdrfile);
+		  char *bhdrfile, char *bulletinA);
 double  lmst(double mjd);
 char   *mjd2iau_date(double mjd);
 int     read_slice(SvSelectionType *user, int idx, int slice, char *rbuf);
@@ -246,5 +254,22 @@ void    swap_long(void *, int) ;
 void    swap_d(double *, int) ;
 int     robust_stats(int n, float *x, float *med, float *mad);
 
+#ifdef USE_NOVAS
+void novas_app2j2000(double rap, double decp, double mjd, double iatutc,
+	       double *ra,double *dec);
+int  novas_mean2j2000(double rap, double decp, double mjd, double iatutc,
+	       double *ra,double *dec);
+int  novas_prenut_vis(SvSelectionType *user,UvwParType *uvw, double mjd);
+#else
+void   sla_amp_(double *ra_app, double *dec_app, double *mjd, 
+	      double *epoch1,double *ra_mean, double *dec_mean);
+void   sla_preces_(char *system,double *epoch, double *epoch1,
+		 double *ra, double *dec,int len);
+void sla_prenut_vis(UvwParType *uvw,double mjd,double ra_app,double dec_app,
+		    double epoch1);
+void   sla_nut_(double *mjd, double *a); 
+double sla_epj_(double *mjd);
+
+#endif //USE_NOVAS
 
 #endif

@@ -335,7 +335,7 @@ int writefqtable(fitsfile *fptr, SvSelectionType *user, int scans, int frequenci
   return status ;
 }
 // create the source table
-int writesutable(fitsfile *fptr, SvSelectionType *user, int scans, int sources, double epoch1) 
+int writesutable(fitsfile *fptr, SvSelectionType *user, int scans, int sources) 
 {
   enum {tfields=19};
   ScanRecType *srec = user->srec ;
@@ -343,9 +343,10 @@ int writesutable(fitsfile *fptr, SvSelectionType *user, int scans, int sources, 
   BurstParType  *burst=&user->burst;
   CorrType *corr = user->corr ;
   struct su_struct sut ;
-  double ra,dec,epoch ;
+  double ra,dec;
   int status ;
   int i,j, row ;
+  double epoch=user->epoch,epoch1;
   char *ttype[tfields] = 
        { "ID. NO. ", "SOURCE  ", "QUAL    ", "CALCODE ", "IFLUX   ",
          "QFLUX   ", "UFLUX   ", "VFLUX   ", "FREQOFF ", "BANDWIDTH",
@@ -393,16 +394,51 @@ int writesutable(fitsfile *fptr, SvSelectionType *user, int scans, int sources, 
     for (j=0; j<4; j++)sut.calcode[j] = ' ';
     if(source->calcode>0)sut.calcode[0]='C';
     sut.bandwidth = user->channels*user->chan_inc*source->ch_width ;
-    epoch=2000.0; //uvw coordinates now always rotated to 2000.0
-    if(!user->recentre)
-      app2j2000(source->ra_app,source->dec_app,user->recfile.mjd_ref,
-		&ra,&dec);
-    else
-      app2j2000(burst->ra_app,burst->dec_app,user->recfile.mjd_ref,
-		&ra,&dec);
+    if(epoch>0){// J2000, otherwise leave as apparent coordinates of date
+      epoch=2000.0;
+      if(!user->recentre){
+	// centre unchanged J2000 coordinates - mean coordinates 
+	// available for phase centre, so use them
+#ifdef USE_NOVAS
+	novas_mean2j2000(source->ra_mean,source->dec_mean,
+		   user->corr->daspar.mjd_ref,user->iatutc,&ra,&dec);
+#else
+      // approx fractional year. does not properly account for leap
+      // years, but should be good enough here. 
+      epoch1=2000+(user->corr->daspar.mjd_ref-51544.5)/365.25;
+      //NB epoch and epoch1 reversed wrt convention used in gvfits
+      ra=source->ra_mean;dec=source->dec_mean;
+      sla_preces_("FK5",&epoch1,&epoch,&ra,&dec,3);
+#endif
+      }else{
+	// centre moved to the burst location, J2000 coordinates, 
+	// apparent coordinates only available. TGC uses topocentric
+	// place of the star whereas we are using the apparent place
+	// to get back the mean position. NB This option is not properly
+	// debugged
+	fprintf(stderr,"WARNING: Rotation to Burst Coord not debugged\n");
+	fprintf(stderr,"         Please check coordinates carefully\n");
+#ifdef USE_NOVAS
+	novas_app2j2000(burst->ra_app,burst->dec_app,user->recfile.mjd_ref,
+		  user->iatutc,&ra,&dec);
+#else
+      sla_amp_(&burst->ra_app,&burst->dec_app,&corr->daspar.mjd_ref,&epoch1,
+	       &ra,&dec);
+      //NB epoch and epoch1 reversed wrt convention used in gvfits
+      sla_preces_("FK5",&epoch1,&epoch,&ra,&dec,3);
+#endif
+      }
+    }else{
+      // centre unchanged and apparent coordinates of date
+      ra=source->ra_app;
+      dec=source->dec_app;
+      // approx fractional year. does not properly account for leap
+      // years, but should be good enough here.
+      epoch=2000+(user->corr->daspar.mjd_ref-51544.5)/365.25; 
+    }
     sut.ra   = ra*180/M_PI ;
     sut.dec  = dec*180/M_PI ;
-    sut.epoch= epoch1;
+    sut.epoch= epoch;
     sut.ra_app = source->ra_app*180/M_PI ;
     sut.dec_app = source->dec_app*180/M_PI ;
     sut.pmra = (source->dra * 86400)*180/M_PI ;
@@ -434,16 +470,15 @@ int writesutable(fitsfile *fptr, SvSelectionType *user, int scans, int sources, 
   return status ;
 }
 // create the header of the random group UV FITS file
-int init_hdr( fitsfile *fptr, SvSelectionType *user, int pcount, int *status,
-	      double epoch1)
+int init_hdr( fitsfile *fptr, SvSelectionType *user, int pcount, int *status)
 { int j ;
   int naxis, bitpix, simple,extend,blocked,groups;      
   long naxes[7],gcount=1 ;
   char ref_date[32], keynew[16] ;
   CorrType *corr = user->corr ;
   ProjectType *proj = &user->srec->scan->proj ;
-  double epoch ;
-
+  double    epoch=user->epoch;
+  
   char *ctype[] = {"COMPLEX", "STOKES", "FREQ", "IF","RA","DEC"};
   float crval[] = {0.0,1.0,-1.0, 5.00E8,1.0,0.0,0.0};
   float cdelt[] = {0.0,1.0,-1.0, 4.8828125e4, 1.0,1.0E0,1.0E0};
@@ -472,7 +507,10 @@ int init_hdr( fitsfile *fptr, SvSelectionType *user, int pcount, int *status,
   naxes[4]= user->sidebands ;
   naxes[5]=1;
   naxes[6]=1;
-  epoch = 2000.0;// uvw now always in J2000
+  if(epoch<0) // epoch of date
+    epoch=2000+(user->corr->daspar.mjd_ref-51544.5)/365.25; 
+  else
+    epoch=2000.0; //default
   crval[3] = RefFreq ;
   crpix[3] = 0.5 ;  /*GMRT frequency referes to the edge of the channel*/
   cdelt[3] = ChanWidth ;
@@ -681,6 +719,67 @@ int copy_burst(SvSelectionType *user,fitsfile *fptr){
   return gcount;
 }
 /*
+  function to average random groups arising from visibilities made from
+  adjacent slices of data. It is *assumed* that the visibilities arise from
+  adjacent slices, and that the random group order (i.e. the chanel, stokes,
+  baseline order) and all other parameters except the visibility values,
+  (u,v,w) values and the timestamp are identical for the two sets of groups.
+
+  groups is the number of groups in each set, the two sets are *vb0 and *vb1
+  and the weighted average is return in *vb0.
+
+*/
+int avg_group(int groups,int group_size,char *vb0, char *vb1,int nthreads){
+  UvwParType      *rp0,*rp1;
+  Cmplx3Type      *n_vis,*o_vis;
+  int             g,v,nvis;
+  double          wt0,wt1;
+
+  // number of visibility sets (i.e. channels*stokes) per group
+  nvis=(group_size-sizeof(UvwParType))/(3*sizeof(float));
+  
+#pragma omp parallel for num_threads(nthreads) private(g,rp0,rp1,o_vis,n_vis,v,wt0,wt1)
+  for(g=0;g<groups;g++){
+    rp0=(UvwParType*)(vb0+g*group_size);
+    rp1=(UvwParType*)(vb1+g*group_size);
+    //copy parameters which do not change during the intergration
+    rp0->baseline=rp1->baseline;rp0->su=rp1->su;rp0->fq=rp1->fq;
+    o_vis=(Cmplx3Type*)(vb0+g*group_size+sizeof(UvwParType));
+    n_vis=(Cmplx3Type*)(vb1+g*group_size+sizeof(UvwParType));
+    //heuristic to get average weight of the input buffer
+    wt0=0.25*((o_vis+nvis/4)->wt+(o_vis+nvis/3)->wt+
+	      (o_vis+nvis/2)->wt+(o_vis+3*nvis/4)->wt);
+    wt1=0.0;
+    for(v=0;v<nvis;v++){//average visibilities
+      if(o_vis->wt < 0.0 || n_vis->wt <0.0)
+	fprintf(stderr,"%d %d %f %f\n",g,v,o_vis->wt, n_vis->wt);
+      if(n_vis->wt<0.0)continue; //ignore flagged data
+      o_vis->r=(o_vis->r*o_vis->wt+n_vis->r*n_vis->wt)/(o_vis->wt+n_vis->wt);
+      o_vis->i=(o_vis->i*o_vis->wt+n_vis->i*n_vis->wt)/(o_vis->wt+n_vis->wt);
+      o_vis->wt=o_vis->wt+n_vis->wt;
+      wt1=wt1+n_vis->wt/nvis;
+      o_vis++;n_vis++;
+    }
+    // average random groups
+    rp0->u=(rp0->u*wt0+rp1->u*wt1)/(wt0+wt1);
+    rp0->v=(rp0->v*wt0+rp1->v*wt1)/(wt0+wt1);
+    rp0->w=(rp0->w*wt0+rp1->w*wt1)/(wt0+wt1);
+    //if(g==0)fprintf(stderr,"%.2f %.9f %f\n",rp0->date1*86400.0,rp0->date2*86400.0,wt0);
+    rp0->date1=(rp0->date1*wt0+rp1->date1*wt1)/(wt0+wt1);
+    rp0->date2=(rp0->date2*wt0+rp1->date2*wt1)/(wt0+wt1);
+    /*
+    if(g==37){
+      o_vis=(Cmplx3Type*)(vb0+37*group_size+sizeof(UvwParType)+123*sizeof(Cmplx3Type));
+      n_vis=(Cmplx3Type*)(vb1+37*group_size+sizeof(UvwParType)+123*sizeof(Cmplx3Type));
+      fprintf(stderr,"%.9f %.9f ",rp0->date2*86400.0,rp1->date2*86400.0);
+      fprintf(stderr," %9.4f %9.4f %4.1f %9.4f %9.4f %4.1f\n",o_vis->r,o_vis->i,o_vis->wt,n_vis->r,n_vis->i,n_vis->wt);
+    }
+    */
+  }
+
+  return 0;
+}
+/*
   function to copy all of the input raw visibilities into random groups,
   irrespective of whether the data contains a burst or not. This could be
   useful for making a continuum map for astrometry etc.
@@ -695,57 +794,100 @@ int copy_allvis(SvSelectionType *user,fitsfile *fptr){
   RecFileParType *rfile=&user->recfile;
   int             rec_per_slice=rfile->rec_per_slice;
   int             baselines=user->baselines;
-  int             n_slice=user->recfile.n_slice;
+  int             n_lta=user->n_lta;
   CorrType       *corr=user->corr;
   int             channels=corr->daspar.channels;
   int             stokes=user->stokes;
-  long            k,group_size,bufsize;
+  long            k,group_size,ibufsize,obufsize;
   int             recl,gcount,groups,status=0;
   int             b,idx,slice,flagged;
-  char           *visbuf,*rbuf;
+  char           *visbuf,*rbuf,*lbuf;
+  int             nsets,i,do_stop;
+  double          lta=user->lta;
+  double          dt;//seconds
+  double          t0d1,t0d2,t1d1,t1d2;  //JD
+  
+  // fix the number of slice sets to be integrated into one lta. A slice
+  // set is a given slice in all the raw visibility files.
+  nsets=(int)round(lta/(rfile->t_slice*rfile->nfiles));
+  if(nsets<1) nsets =1;
+  printf("lta = %.2f (s)\n",nsets*rfile->nfiles*rfile->t_slice);
   
   // allocate space for raw visibilities (one full timeslice is processed
-  // at a time). Space for the output random groups is allocated inside the
-  // copy_* functions
+  // for all slices at a time). Space for the output random groups is 
+  // allocated inside the copy_* functions
   recl=user->corr->daspar.channels*user->corr->daspar.baselines*sizeof(float);
-  bufsize=rec_per_slice*recl;
-  if((rbuf=malloc(bufsize))==NULL){
-    fprintf(stderr,"Malloc error for %ld bytes\n",bufsize);
+  ibufsize=rec_per_slice*recl;
+  if((rbuf=malloc(ibufsize*rfile->nfiles))==NULL){
+    fprintf(stderr,"Malloc error for %ld bytes\n",ibufsize*rfile->nfiles);
     return -1;
   }
 
   // allocate space for the output groups
   group_size=user->channels*user->stokes*sizeof(Cmplx3Type)+sizeof(UvwParType);
   groups=user->baselines/user->stokes;
-  bufsize=groups*group_size;//only one record on output
-  if((visbuf=(char*)malloc(bufsize))==NULL)
+  obufsize=groups*group_size;//only one record on output
+  if((visbuf=(char*)malloc(obufsize*rfile->nfiles))==NULL)
     {fprintf(stderr,"Malloc Error\n");return -1;}
-
+  if((lbuf=(char*)calloc(obufsize,sizeof(char)))==NULL) //init ltabuf to 0
+    {fprintf(stderr,"Malloc Error\n");return -1;}
+  
   // read visibilties from raw files, write out random groups to FITS FILE
-  // loop over files and slices, and process one full slice at a time.
+  // loop over slices and files
   gcount=1;//FITS numbering starts from 1
-  for(idx=0;idx<rfile->nfiles;idx++){
-    for(slice=0;;slice++){//process data until we reach EoF
-      if(n_slice>0 && slice >= n_slice) break;
-      if(read_slice(user,idx,slice,rbuf)<0) break; //Reached EoF
-      if((groups=avg_vis(user,idx,slice,rbuf,visbuf))<0){
-	fprintf(stderr,"Error processing %s slice %d\n",rfile->fname[idx],
-		 slice);
-	return -1;
+  for(slice=0,do_stop=0;do_stop==0;slice++){//process data until we reach EoF
+#pragma omp parallel for num_threads(rfile->nfiles) private(idx)
+    for(idx=0;idx<rfile->nfiles;idx++){
+      if(read_slice(user,idx,slice,rbuf+idx*ibufsize)<0){//Reached EoF
+	do_stop=1;
       }
-      k =  groups*group_size;
-      if (user->corr->endian & LittleEndian)swap_long(visbuf, k/sizeof(float));
-      ffptbb(fptr,gcount,1,(long)k,(unsigned char *)visbuf,&status) ; 
-      if (status){printerror (status);break;}
-      fprintf(stderr,"File %d Slice %d wrote %12.4e MBytes\n",idx,slice,
-	      (1.0*k)/1.0e6);
-      gcount += groups;
+      if((groups=avg_vis(user,idx,slice,rbuf+idx*ibufsize,visbuf+idx*obufsize))<0){
+	fprintf(stderr,"Error processing %s slice %d\n",rfile->fname[idx],
+		slice);
+	do_stop=2;
+      }
     }
+    if(do_stop<0){
+      if(do_stop==2)
+	{fprintf(stderr,"Error averaging visibilities\n");}
+      return -1;
+    }
+    for(idx=0;idx<rfile->nfiles;idx++) // average the visibility groups
+      avg_group(groups,group_size,lbuf, visbuf+idx*obufsize,user->num_threads);
+    if(slice%nsets==nsets-1){//end of integration
+      { UvwParType *rpar=(UvwParType*)lbuf; // debug print
+	if(slice==nsets-1)//first lta
+	  {t0d1=rpar->date1; t0d2=rpar->date2;dt=0.0;}
+	else{
+	  t1d1=rpar->date1;t1d2=rpar->date2;
+	  dt=(t0d1-t1d1)*86400.0+(t1d2-t0d2)*86400.0;
+	  t0d1=t1d1;t0d2=t1d2;
+	}
+      }
+      k= groups*group_size;
+      { Cmplx3Type *vis;
+	UvwParType *rpar;
+	vis=(Cmplx3Type*)(lbuf+137*group_size+sizeof(UvwParType)
+			  +131*sizeof(Cmplx3Type));
+	rpar=(UvwParType*)(lbuf+137*group_size);
+	fprintf(user->lfp,"%12.6e %12.6e %12.6e %9.4f %9.4f %9.4f\n",
+		rpar->u,rpar->v,rpar->w,vis->r,vis->i,vis->wt);
+      }
+      if(user->corr->endian & LittleEndian)
+	  swap_long(lbuf, k/sizeof(float));
+      ffptbb(fptr,gcount,1,(long)k,(unsigned char *)lbuf,&status) ; 
+      if (status){printerror (status);break;}
+      fprintf(stderr,"Lta %d wrote %12.4e MBytes dt=%5.2f\n",slice/nsets,(1.0*k)/1.0e6,dt);
+      gcount += groups;
+      memset(lbuf,0,obufsize); // reset ltabuf to 0
+    }
+    if(n_lta>0 && slice/nsets==n_lta-1) break; // last lta the user wants
   }
+  
   gcount--; // total number of groups written
 
-  free(rbuf);
-  free(visbuf);
+  free(rbuf); free(visbuf); free(lbuf);
+
 
   return gcount;
 }
@@ -760,6 +902,7 @@ int main(int argc, char **argv)
   InitHdrType    *hdr;
   SourceParType  *source;
   char            antfile[PATHLEN],uparfile[PATHLEN],bhdrfile[PATHLEN];
+  char            bulletinA[PATHLEN];
   int             c;
   extern char    *optarg;
   extern int      optind,opterr;
@@ -769,14 +912,15 @@ int main(int argc, char **argv)
   strcpy(uparfile,"svfits_par.txt");
   strcpy(bhdrfile,"");
   if(argc-1){
-    while((c=getopt(argc,argv,"a:b:u:h"))!=-1){
+    while((c=getopt(argc,argv,"a:b:B:u:h"))!=-1){
       switch(c){
       case 'a': strncpy(antfile,optarg,PATHLEN-1); break;
       case 'b': strncpy(bhdrfile,optarg,PATHLEN-1); break;
+      case 'B': strncpy(bulletinA,optarg,PATHLEN-1); break;
       case 'u': strncpy(uparfile,optarg,PATHLEN-1);break;
       case 'h': // default to next case
       case '?': fprintf(stderr,
-			"Usage: svfits [-a AntSampFile] [-u UserParmFile]\n");
+			"Usage: svfits [-a AntSampFile] [-b BinHeaderFile] [-B BulletinAFile] [-u UserParmFile]\n");
 	        return -1;
       }
     }
@@ -792,8 +936,9 @@ int main(int argc, char **argv)
   user.srec = (ScanRecType *) malloc(hdr->scans*sizeof(ScanRecType)) ;
   user.srec->scan=(ScanInfoType *) malloc(hdr->scans*sizeof(ScanInfoType)) ;
   source=&user.srec->scan->source;
+  bzero(source,sizeof(SourceParType));
   user.corr=(CorrType*)malloc(sizeof(CorrType));
-  if(init_user(&user,uparfile,antfile,bhdrfile)<0){return -1;}
+  if(init_user(&user,uparfile,antfile,bhdrfile,bulletinA)<0){return -1;}
   RefFreq   = source->freq[0];
   ChanWidth = source->ch_width*source->net_sign[0] ;
 
@@ -805,7 +950,7 @@ int main(int argc, char **argv)
     remove(outfile) ;
   }
   if ( ffinit(&fptr,outfile,&status)) return printerror(status);
-  if (init_hdr(fptr,&user,pcount,&status,user.epoch) != 0)
+  if (init_hdr(fptr,&user,pcount,&status) != 0)
   { if (status) return printerror(status);
     fprintf(stderr,"FATAL Error in init_hdr\n");
     return -1 ;
@@ -826,7 +971,7 @@ int main(int argc, char **argv)
     printerror(status);
   if (writefqtable(fptr,&user,user.scans,frequencies))//frequency table
     printerror(status) ;
-  if (writesutable(fptr, &user, user.scans, sources,user.epoch))//source table
+  if (writesutable(fptr, &user, user.scans, sources))//source table
     printerror(status) ;
   if(ffclos(fptr,&status)) printerror( status );
   

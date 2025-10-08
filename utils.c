@@ -7,7 +7,13 @@
 # include <sys/stat.h>
 # include <sys/types.h>
 # include <time.h>
+
 # include "svio.h"
+# include "novas.h"
+# include "novascon.h"
+# include "solarsystem.h"
+# include "nutation.h"
+
 
 
 void swap_bytes(unsigned short *p, int n)
@@ -126,3 +132,136 @@ ushort float_to_half(const float x) {
     return (b&0x80000000)>>16 | (e>112)*((((e-112)<<10)&0x7C00)|m>>13) | ((e<113)&(e>101))*((((0x007FF000+m)>>(125-e))+1)>>1) | (e>143)*0x7FFF; 
 }
 
+/* function to read in IERS Bulletin A. One would need to download the relevant
+   version of Bulletin A, and then comment out (with a *) all the lines except
+   for the final table. The dut1 read in here is defined as:
+   dut1=UT1-UTC.
+
+   jnc june 2025
+*/
+int init_dut1tab(SvSelectionType *user, char *bulletinA){
+  char          line[LINELEN];
+  DUT1TabType  *dtab=user->dtab;
+  FILE         *fp;
+  static int    warn=0;
+  if((fp=fopen(bulletinA,"r"))  == NULL){
+    if(!warn){
+      fprintf(stderr,"WARNING:Could not open %s\n",bulletinA);
+      warn=1;
+      return -1;
+    }
+  }
+
+  // read in the dut1 data from BulletinA file
+  user->n_dut1=0;
+  while(fgets(line,LINELEN-1,fp) !=NULL){
+    if(line[0]=='*') continue;
+    if(user->n_dut1==DUT1_TABSIZE)
+      {fprintf(stderr,"DUT1 TabSize %d Exceeded\n",DUT1_TABSIZE);return -1;}
+    if(sscanf(line,"%*d %*d %*d %lf %*f %*f %lf",&dtab->mjd,&dtab->dut1) !=2)
+      {fprintf(stderr,"WARNING: Format error in line %s\n",line);return -1;}
+    user->n_dut1++; dtab++;
+  }
+  fclose(fp);
+  
+  return 0;
+}
+/*
+  interpolate the already read in dut1 to get the dut1 at the specified
+  mjd. The dut1 is given in the table with an entry for every day, so the
+  actual time frame in which mjd is given does not matter much.
+
+  jnc june 2025
+*/
+double get_dut1(SvSelectionType *user,double mjd)
+{ int           i;
+  double        mjd0,mjd1,dut1;
+  int           n_dut1=user->n_dut1;
+  DUT1TabType  *dtab=user->dtab;
+  static int    warn=0;
+  
+  if(n_dut1<=0){
+    if(!warn){
+      fprintf(stderr,"WARNING: NO DUT1 CORRECTIONS AVAILABLE!\n");
+      fprintf(user->lfp,"WARNING: NO DUT1 CORRECTIONS AVAILABLE!\n");
+    }
+    warn=1;
+    return 0.0;
+  }
+
+  // get the dut1 by linear interpolation
+  for(i=0;i<n_dut1-1;i++){
+    if(dtab[i].mjd <= mjd && dtab[i+1].mjd >= mjd){
+      mjd0=dtab[i].mjd; mjd1=dtab[i+1].mjd;
+      dut1=dtab[i].dut1*(mjd1-mjd)/(mjd1-mjd0)
+	+dtab[i+1].dut1*(mjd-mjd0)/(mjd1-mjd0);
+      break;
+    }
+  }
+
+  //issue warning in case no dut1 correction found
+  if(i==n_dut1-1){
+    fprintf(stderr,"WARNING: Specified mjd %lf out of range!\n",mjd);
+    fprintf(stderr,"WARNING: NO DUT1 CORRECTION!\n");
+    fprintf(user->lfp,"WARNING: Specified mjd %lf out of range!\n",mjd);
+    fprintf(user->lfp,"WARNING: NO DUT1 CORRECTION!\n");
+    return 0.0;
+  }
+
+  // Request user to download file if we are near end
+  if(dtab[n_dut1-1].mjd - mjd < DUT1_PREDICTION_BUFFER){
+    fprintf(stderr,"WARNING: NEARING/REACHED END OF BULLETINA ENTRIES!\n");
+    fprintf(stderr,"WARNING: PLEASE DOWNLOAD UPDATED IERS BULLETIN A\n");
+  }
+
+  return dut1;
+}
+/*
+  compute the hour angle at a given mjd (which is in the UTC scale). This
+  routine is essentially the same calculation as is done gvfits.
+
+  Added the option of correcting for the equation of the equinoxes, using
+  equinoxes using NOVASC routines, but this is not fully debugged and is
+  commented out at the moment.
+
+
+  jnc oct 2025
+*/
+double get_ha(SvSelectionType *user, double tm){
+  double         dut1; //UT1-UTC
+  double         mjd_ref=user->recfile.mjd_ref;
+  SourceParType *source=&user->srec->scan->source;
+  double         ut,tu,res,gmrt_long,lmstime,lst;
+  double         jd_tdb,mobl,tobl,ee,dpsi,deps;
+  short int      accuracy=1;
+
+#ifdef DO_DUT1_CORR
+  // get UT1-UTC at the given mjd
+  dut1 = get_dut1(user,mjd_ref+tm/86400.0);
+  user->corr->daspar.dut1 = dut1; // seconds
+#else
+  user->corr->daspar.dut1=0.0;
+#endif
+
+  // compute the mean sidereal time and then add equation of equinoxes and dut1
+  // to get to apparent sideral time
+  gmrt_long=74.05; // degrees - this should be longitude of C02
+  ut = mjd_ref + tm/86400.0;
+  tu = (ut - 51544.5) / 36525.;  // centuries since J2000  
+  res = ut + gmrt_long/360.0 ; res = res - floor(res) ;
+  lmstime = res + (((0.093104 - tu * 6.2e-6) * tu
+		    + 8640184.812866) * tu + 24110.54841)/86400.0 ;
+  lmstime = (lmstime - floor(lmstime))*2.0 * M_PI ;
+
+#ifdef USE_NOVAS
+  //approximate TDB by TT (good to a few ms). tm is wrt midnight IST, where
+  //as we want the offset from UTC here.
+  jd_tdb=2400000.5+mjd_ref+(tm-5.5*3600.0+32.184+user->iatutc-dut1)/86400.0;
+  e_tilt(jd_tdb,accuracy,&mobl,&tobl, &ee, &dpsi,&deps);
+  lst = lmstime + (ee+dut1)*(M_PI/(12.0*3600.0));
+  //return (lst - source->ra_app);  DOES NOT MATCH GVFITS; GIVES WRONG COORDINATES
+#endif
+  
+  return (lmstime-source->ra_app); 
+
+}

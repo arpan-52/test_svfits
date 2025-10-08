@@ -27,6 +27,9 @@
 # fixed a bug where the program was not closing cleanly if only a single
 # slice is to be plotted.
 #
+# modified to the new data format where the file index is part of the
+# metadata
+# jnc june 25
 import sys
 import numpy as np
 from   scipy import stats
@@ -36,13 +39,15 @@ import matplotlib.ticker as ticky
 from   datetime import datetime,timedelta
 import argparse
 import copy
+import os
+
 
 MaxAnt=32
 MaxBase=(MaxAnt*(MaxAnt+1))//2
 Channels=4096
 Stokes=2
 FloatSize=4
-TimeSize=16
+TimeSize=20
 Recl=MaxBase*Channels*Stokes*FloatSize
 NFiles=16
 RecPerSlice=50
@@ -55,7 +60,7 @@ ShortBase=[34,37,38,40,67,68,70,95,152,154,180]#(C03-C04),(C01,C02,C05,C06,C09)
 BaseFlags=np.zeros(MaxBase*Stokes)
 ChanFlags=np.zeros(Channels)
 
-def get_data(fp,idx,rec,self,coherent,sel_ant0,sel_ant1,drop_csq,nan_stats):
+def get_data(fp,rec,self,coherent,sel_ant0,sel_ant1,drop_csq,nan_stats):
     """Returns [average] of selected data in a 1.3ms SPOTLIGHT raw visibility file."""
 
     amp=np.zeros(Channels,dtype=np.float32)
@@ -79,6 +84,7 @@ def get_data(fp,idx,rec,self,coherent,sel_ant0,sel_ant1,drop_csq,nan_stats):
         return [0],[0]
     if time_off > 0: # we have a timestamp
         tv=np.frombuffer(rbuf1,dtype=np.int64,count=2) #timeval is signed long
+        idx=np.frombuffer(rbuf1[16:],dtype=np.int32,count=1)-1
         rec_time=tv[0]+tv[1]/1.0e6+idx*SliceDuration #offset for this file
         SliceDate=str(datetime.fromtimestamp(rec_time))
     rbuf=rbuf1[time_off:]
@@ -167,8 +173,6 @@ if __name__=='__main__':
                         help="drop central square baselines")
     parser.add_argument("-f","--files", help="list of files to process",
                         nargs='+',required=True)
-    parser.add_argument("-i","--index", help="index of the files to process",
-                        nargs='+',type=int,required=True)
     parser.add_argument("-I","--interactive", action="store_true",
                         help="interactive plotting")
     parser.add_argument("-n","--nan_stats", action="store_true",
@@ -193,14 +197,9 @@ if __name__=='__main__':
     nan_stats=args.nan_stats
     self=args.self
     files=args.files
-    index=args.index
     if args.ants is not None:
         ant0,ant1=args.ants
         drop_csq=False;self=False;
-    if len(files) != len(index):
-        print("Number of files does not match number of indices")
-        parser.print_help()
-        exit(1)
     if args.overplot != None:
         overplot_sel=True
         chan_sel_file=args.overplot
@@ -240,8 +239,7 @@ if __name__=='__main__':
     dyn_spc1=np.zeros([RecPerSlice,Channels],dtype=np.float32)
     if collate:
         dyn_spc2=np.zeros([RecPerSlice*len(files),Channels],dtype=np.float32)
-    for ifile,ftuple in enumerate(zip(files,index)):
-        fname,idx=ftuple
+    for ifile,fname in enumerate(files):
         try:
             fp=open(fname,"rb")
         except:
@@ -251,7 +249,7 @@ if __name__=='__main__':
         else:
             r=slice_a[0]*RecPerSlice
         while(True):
-            re,im=get_data(fp,idx,r,self,coherent,ant0,ant1,drop_csq,nan_stats)
+            re,im=get_data(fp,r,self,coherent,ant0,ant1,drop_csq,nan_stats)
             if len(re) < Channels:
                 print("Short Read: EoF reached for %s after %d recs" %(fname,r))
                 break
@@ -298,7 +296,7 @@ if __name__=='__main__':
                 if not bandpass:
                     im=ax.imshow(dyn_spc,origin='lower',
                                  cmap=plt.get_cmap('viridis'),
-                                 norm=matplotlib.colors.LogNorm())
+                                 norm=matplotlib.colors.PowerNorm(0.5))
                 else:
                     v_min=med-3*mad
                     v_max=med+3*mad
@@ -330,7 +328,7 @@ if __name__=='__main__':
                 plt.annotate(foot,xy=(0.3,0.0),xycoords='figure fraction')
                 if interactive:
                     plt.show()
-                plt.savefig(fname+".pdf")
+                plt.savefig(os.path.basename(fname)+".pdf")
                 plt.close()
                 if collate:
                     exit(1) # all done

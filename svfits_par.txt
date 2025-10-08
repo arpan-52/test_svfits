@@ -1,54 +1,57 @@
 *
-* parameter file for 3C147 offcentre observations taken on 03/June/25
+* 08/Oct/25 Sample svfits_par.txt file
 *
 * I/O Files
 *
-NFILE          16 
-PATH           /lustre_scratch/spotlight/data/SPLT_20250603_153053/DT_20250603_154206_448911
-INPUT          visi-R01.raw,visi-R02.raw,visi-R03.raw,visi-R04.raw,visi-R05.raw,visi-R06.raw,visi-R07.raw,visi-R08.raw,visi-R09.raw,visi-R10.raw,visi-R11.raw,visi-R12.raw,visi-R13.raw,visi-R14.raw,visi-R15.raw,visi-R16.raw
-HAVE_IDX       1            ! raw visibility files contain the index meta-data [0/1]
-N_SLICE        1            ! number of slices per file to process (ALL_DATA only) -1 means process all data
-FITS           TEST.FITS    ! output FITS file
-ALL_CHAN       0            ! copy over all channels for records with burst [0/1]
-ALL_DATA       1            ! copy over all data, ignore burst parameters [0/1]
-NCHAV          16           ! number of channels to average together, for ALL_DATA only
+NFILE           16
+PATH            /lustre_scratch/spotlight/data/SPLT_20250919_071204/RawVisi/DT_20250919_072251_137359/! directory containing raw files (defalt CWD)
+INPUT           Visi-R01.raw,Visi-R02.raw,Visi-R03.raw,Visi-R04.raw,Visi-R05.raw,Visi-R06.raw,Visi-R07.raw,Visi-R08.raw,Visi-R09.raw,Visi-R10.raw,Visi-R11.raw,Visi-R12.raw,Visi-R13.raw,Visi-R14.raw,Visi-R15.raw,Visi-R16.raw
+*HAVE_IDX       1 ! [set to 0 for historical files, essentially depreciated now, and hence commented out]
+*
+FITS            TEST.FITS
+ALL_CHAN        0    ! make a 4096 channel FITS file, flagging out channels without burst signal
+ALL_DATA        0    ! convert all raw data to FITS averaging over channels (NCHAV) and tile (LTA)
+LTA             1.0  ! integration time in ALL_DATA mode (seconds)
+N_LTA           4    ! number of output records of length LTA seconds to make (in ALL_DATA MODE)
+NCHAV           16   ! number of channels to average (in ALL_DATA mode)
 *
 * Observing Parameters
 *
-OBS_MJD        60828.770833! MJD at ObsStart, used for coordinate precession
-FREQ_SET       5.0e8:3.0e8:4096 !freq0,freq1,nchan (Hz)
-ANTMASK        1073741823 ! all 30 antennas
-*ANTMASK        1065287167! -C10,E04,S06
-EPOCH          2000.0000  !Output Epoch (EPOCH<0.0 ==> date co-ordinates)
-RECENTRE_VIS   1          ! change phase centre to burst_ra,dec [0/1]
-IATUTC         37.0       !(IAT-UTC [seconds])
-COORD_TYPE     DEFAULT    ! Co-ord Type (Options: DEFAULT/APPARENT/MEAN)
-RA_APP         1.505545   ! Apparent RA (radians)
-DEC_APP        0.872631   ! Apparent DEC (radians)
-RA_MEAN        1.505686   ! Mean RA (radians)
-DEC_MEAN       0.872580   ! Mean DEC (radians)
+OBS_MJD         60676.590278   ! MJD at start of observations (depreciated, all times obtained from visibility files)
+FREQ_SET        550000000:750000000.0:4096! freq0,freq1,nchan (Hz)
+ANTMASK         1073741823! all 30 antennas
+EPOCH           2000.0000! Output Epoch (EPOCH<0.0 ==> date co-ordinates)
+STOKES_TYPE     0 ! polarizations labelled as "RL", use 1 for labelling polarizations as "XY"
+IATUTC          37.0! (IAT-UTC [seconds])
+*COORD_TYPE      DEFAULT! Co-ord Type (Options: DEFAULT/APPARENT/MEAN) [Depreciated, and commented out]
+RA_MEAN         0.942293541667805!  Mean  RA (radians), Phase centre
+DEC_MEAN        0.953764630910075!  Mean  DEC (radians), Phase centre
+RA_APP          0.9423668280430961! Apparent RA (radians), Phase centre
+DEC_APP         0.9537669347446877! Apparent (radians), Phase centre
 *
-* Burst Parameters (UNUSED HERE)
+* Burst Parameters
 *
-BURST_NAME     OBS BURST !
-BURST_MJD      60828.770833! 
-BURST_TIME     100.0      ! arrival time at burst_freq (sec)
-BURST_DT       0.1        ! error in arrival time (sec)
-BURST_INTWD    20.0e-3    ! intrisic width (sec)
-BURST_WIDTH    2.4        ! observed burst width (sec)
-BURST_DM       28         ! DM of the burst
-BURST_DDM      0.1        ! error in the DM
-BURST_FREQ     7.5e8      ! Freq that the BURST_TIME refers to (Hz)
-BURST_BM_ID    1          ! ID of the beam that the burst was found in
-BURST_RA       1.503349   ! radians (3C147)
-BURST_DEC      0.870309   ! radians
-UPDATE_BURST   1          ! update burst parms using only MJD, INT_WD and DM
+BURST_NAME      OBS BURST
+BURST_MJD       60937.0783823128! The MJD of the burst 
+BURST_TIME      100.0! arrival time at burst_freq (sec) [Debug only]
+BURST_DT        0.1! error in arrival time (sec)  [Debug only]
+BURST_INTWD     0.02752512! intrisic width (sec) 
+BURST_WIDTH     2.4! observed burst width (sec) [Debug only]
+BURST_DM        23.0! DM of the burst
+BURST_DDM       0.1! error in the DM [Debug only]
+BURST_FREQ      749975585.9375! Freq that the BURST_TIME refers to (Hz)
+BURST_BM_ID     0! ID of the beam that the burst was found in
+BURST_RA        0.9435687065124512! RA of beam with burst (radians, apparent)  [used only if RECENTRE is set]
+BURST_DEC       0.9538228511810303! DEC of beam with burst (radians, apparent) [used only if RECENTRE is set]
+UPDATE_BURST    1! update burst parms using only MJD, INT_WD, BURST_FREQ and DM [This should be the default]
 *
 *DATA PROCESSING PARMS
 *
-DO_BAND         0         ! do amplitude bandpass calibration [0/1]
-DO_FLAG         1         ! do robust statsistics based flagging [0/1]
-DO_BASE         0         ! remove off source baseline [0/1]
-THRESH         20         ! threshold for MAD flagging
-POST_CORR       0         ! generate postcorrelation beam output [0/1]
-NUM_THREADS     32        ! number of threads to use for parallel sections of code
+DO_BAND         1! do amplitude bandpass calibration [0/1]
+DO_BASE         1! subtract baseline (i.e. mean off_src)  [0/1]
+DO_FLAG         1! do robust statsistics based flagging [0/1]
+THRESH          20! threshold for flagging
+POST_CORR       0! generate postcorrelation beam output [0/1]
+DROP_CSQ        0! drop CSQ baselines while making postcorr beam [0/1]
+RECENTRE        0! recenter the visibilities to the BURST(RA,DEC) [experimental]
+NUM_THREADS     32! number of threads to use in parallel sections

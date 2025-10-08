@@ -8,12 +8,9 @@
 #include<errno.h>
 
 #include"fitsio.h"
-#include"novas.h"
-#include"novascon.h"
-#include"solarsystem.h"
-#include"nutation.h"
 #include "gmrt_newcorr.h"
 #include "svio.h"
+
 
 enum{Hdrlen=81920,Len=80};
 static char Buf[Hdrlen], *Bufp ;// local buffer for reading hdr files
@@ -21,20 +18,20 @@ const char cont_char = '*', begin_char = '{', end_char = '}';
 
 // The enum and the char array need to match exactly, and are used to
 // parse the input parameter file.
-enum {NFiles,Path,InputFile,HaveIdx,NSlice,FitsFile,AntMask,AllChan,AllData,
-      NCHAV,IATUTC,Epoch,ObsMjd,FreqSet,CoordType,RaApp,DecApp,RaMean,DecMean,
+enum {NFiles,Path,InputFile,HaveIdx,Lta,NLta,FitsFile,AntMask,AllChan,AllData,
+      NCHAV,IATUTC,Epoch,ObsMjd,FreqSet,RaApp,DecApp,RaMean,DecMean,
       StokesType,BurstName,BurstMJD,BurstTime,BurstDT,BurstIntWd,BurstWd,
       BurstDM,BurstDDM,BurstFreq,BurstBmId,BurstRa,BurstDec,UpdateBurst,
       DoFlag,Thresh,DoBand,DoBase,PostCorr,DropCsq,NumThreads,Recentre,
-      SvVars} SvVarType ;
+      CoordType,SvVars} SvVarType ;
 char *SvVarname[SvVars] =
-  {"NFILE","PATH","INPUT","HAVE_IDX","N_SLICE","FITS","ANTMASK","ALL_CHAN",
-   "ALL_DATA","NCHAV","IATUTC","EPOCH","OBS_MJD","FREQ_SET","COORD_TYPE",
+  {"NFILE","PATH","INPUT","HAVE_IDX","LTA","N_LTA","FITS","ANTMASK","ALL_CHAN",
+   "ALL_DATA","NCHAV","IATUTC","EPOCH","OBS_MJD","FREQ_SET",
    "RA_APP","DEC_APP","RA_MEAN","DEC_MEAN","STOKES_TYPE","BURST_NAME",
    "BURST_MJD","BURST_TIME","BURST_DT","BURST_INTWD","BURST_WIDTH","BURST_DM",
    "BURST_DDM","BURST_FREQ","BURST_BM_ID","BURST_RA","BURST_DEC","UPDATE_BURST",
    "DO_FLAG","THRESH","DO_BAND","DO_BASE","POST_CORR","DROP_CSQ",
-   "NUM_THREADS","RECENTRE"};
+   "NUM_THREADS","RECENTRE","COORD_TYPE"};
 static double K0=4.15e-3; // DM constant in seconds
 
 float svVersion(void){//sets the version number for log and history
@@ -91,7 +88,8 @@ int svuserInp (char *filename, SvSelectionType *user ){
 		     }
 		     break;
       case HaveIdx  :sscanf(p,"%d",&user->recfile.have_idx);break;
-      case NSlice   :sscanf(p,"%d",&user->recfile.n_slice);break;
+      case Lta      :sscanf(p,"%lf",&user->lta);break;
+      case NLta   :sscanf(p,"%d",&user->n_lta);break;
       case AntMask  :sscanf(p,"%u",&user->antmask);break;
       case AllChan  :sscanf(p,"%d",&user->all_chan);break;
       case AllData  :sscanf(p,"%d",&user->all_data);break;
@@ -111,7 +109,6 @@ int svuserInp (char *filename, SvSelectionType *user ){
                      corr->daspar.channels=nchan;
 		     break;
       case Epoch    :sscanf(p,"%lf",&user->epoch);break;
-      case CoordType:strcpy(user->coord_type,p);break;
       case RaApp    :sscanf(p,"%lf",&user->srec->scan->source.ra_app);break;
       case DecApp   :sscanf(p,"%lf",&user->srec->scan->source.dec_app);break;
       case RaMean   :sscanf(p,"%lf",&user->srec->scan->source.ra_mean);break;
@@ -138,6 +135,7 @@ int svuserInp (char *filename, SvSelectionType *user ){
       case DoBase   :sscanf(p,"%d",&user->do_base);break;
       case PostCorr :sscanf(p,"%d",&user->postcorr);break;
       case DropCsq  :sscanf(p,"%d",&user->drop_csq);break;
+      case CoordType:break; // depreciated
       case NumThreads:sscanf(p,"%d",&user->num_threads);break;
     }
   }
@@ -194,7 +192,7 @@ int init_vispar(SvSelectionType *user){
 	  a1=base[bs].samp[1].ant_id;b1=base[bs].samp[1].band;
 	  if((b0!=band) ||(b1!=band)) continue;
 	  if(ant0==a0 && ant1==a1){
-	    visinfo[bs1].flip=0;
+	    visinfo[bs1].flip=1; // REVERSED ON 26/SEP/25 TO CHECK BURST COORDINATES
 	    visinfo[bs1].ant0=ant0;visinfo[bs1].ant1=ant1;
 	    visinfo[bs1].band0=b0;visinfo[bs1].band1=b1;
 	    visinfo[bs1].drop=0; 
@@ -202,7 +200,7 @@ int init_vispar(SvSelectionType *user){
 	    bs1++;break;
 	  }else{
 	    if(ant0==a1 && ant1==a0){
-	      visinfo[bs1].flip=1;
+	      visinfo[bs1].flip=0;
 	      visinfo[bs1].ant0=ant0;visinfo[bs1].ant1=ant1;
 	      visinfo[bs1].band0=b0;visinfo[bs1].band1=b1;
 	      visinfo[bs1].drop=0; 
@@ -475,7 +473,7 @@ int init_corr(SvSelectionType *user, char *hdrfile){
   daspar->lta=64;   //sta cycles per lta == 1.30172 ms
   daspar->t_unit=1; //backwards compatibility
   daspar->mjd_ref=60676;// 1Jan25 (place holder, will be overwritten)
-  daspar->dut1=37; // seconds as on 16/Mar/25 (WILL BE OVERWRITTEN?)
+  daspar->dut1=0.0; //should be overwritten by BulletinA vals (but unused)
   
   // get the sampler and antenna parameters from the header file
   Bufp = Buf ;
@@ -568,7 +566,8 @@ int update_burst(SvSelectionType *user){
 
   jnc march 2025
 */
-int init_user(SvSelectionType *user, char *uparfile, char *antfile, char *bhdrfile){
+int init_user(SvSelectionType *user, char *uparfile, char *antfile,
+	      char *bhdrfile, char *bulletinA){
   VisParType       *vispar=&user->vispar;
   CorrType         *corr=user->corr;
   CorrParType      *corrpar=&corr->corrpar;
@@ -586,7 +585,7 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile, char *bhdrfi
 
   //set timestamp to the middle of the integration
   user->timestamp_off=0.5*daspar->lta*user->statime;
-  user->iatutc = 37 ;  // default
+  user->iatutc = 37.0; // default, leap seconds are probably now fixed
   user->epoch = 2000.0;// default is J2000 coordinates
   user->stokes=2; // RR, LL by default
   /* Set default stokes for RR,LL */
@@ -671,8 +670,11 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile, char *bhdrfi
   for(i=1;i<rfile->nfiles;i++) // start time for data in file
     rfile->t_start[i]=rfile->t_start[i-1]+rfile->t_slice;
   rfile->mjd_ref=0.0;// computed when the first slice is read
-  rfile->n_slice=-1;// process all slices (only used when all_data=1)
-
+  user->n_lta=-1;// process all slices (only used when all_data=1)
+  user->n_dut1=0.0;// no dut1 correction available by default
+#ifdef DO_DUT1_CORR
+  init_dut1tab(user,bulletinA);
+#endif
   //override defaults with actual parameter settings in the binary header
   //file, if specified
   if(strlen(bhdrfile)){
@@ -706,8 +708,11 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile, char *bhdrfi
   }
   if(user->num_threads<0)
     {fprintf(stderr,"Illegal NumThreads %d\n",user->num_threads); return -1;}
-  user->epoch=2000.0; // Force epoch to 2000, regardless of user setting may25
+#ifdef USE_NOVAS // do coordinate transformation using NOVAS instead of SLA
   init_mat(user); // initialize matrices for J2000 conversion etc.
+#endif
+  if(user->epoch<0 && user->recentre)
+    {fprintf(stderr,"recentre works only for J2000 epoch"); return -1;}
   return 0;
 }
 /*
@@ -742,7 +747,8 @@ double unix_time_to_ist(time_t unix_time, double f_sec){
   jnc may 2025
 
   fixed bugs in the computation of jd as well as the computation of mjd
-  at midnight IST
+  at midnight IST (i.e. is basically UTC, will need correction to get to
+  TT)
   jnc 14june 2025
   
 */
@@ -796,6 +802,8 @@ int open_file(SvSelectionType *user,int idx,char *fname,FILE **fp){
 
   idx is now embedded in the file. Modified the code to read it (if
   user->recfile.have_idx is set) and ignore the value supplied to the function
+
+  26/Sep/25 added setting of daspar->mjdref
   
 */
 double get_slice_time(SvSelectionType *user, int idx, int slice){
@@ -812,6 +820,7 @@ double get_slice_time(SvSelectionType *user, int idx, int slice){
   double          tiny;
   FILE           *fp;
   char            fname[LINELEN+PATHLEN+1];
+  DasParType     *daspar=&user->corr->daspar;
   struct timeval  tv;
   
   if(user->fake_data){// use start time set in init_user() [debug use only]
@@ -851,6 +860,7 @@ double get_slice_time(SvSelectionType *user, int idx, int slice){
       rfile->mjd_ref=unix_time_to_mjd_ref(unix_time,tv.tv_usec/1.0e6);
       fprintf(user->lfp,"MJD_REF for visibility files = %20.10f\n",
 	      rfile->mjd_ref);
+      daspar->mjd_ref=rfile->mjd_ref; // USE THIS MJD REF INSTEAD OF USER SUPPLIED
     }
   }else{
     if(start_time<rfile->t_start[idx]){// data crosses midnight
@@ -1109,163 +1119,7 @@ int get_chan_num(double trec,SvSelectionType *user,int *cs,int *ce){
     *cs=*ce=corr->daspar.channels;
   return 0;
 }
-/*
-  Function to compute the J2000 coordinates using the novas routines from
-  the apparent coordinates.
-  jnc may 2025
-*/
-void app2j2000(double rap, double decp, double mjd, double *ra,double *dec)
-{
-  double    jd;
-  short int accuracy;
-
-  accuracy=1; // less accurate, fine for GMRT
-  jd=2400000.5+mjd; 
-  rap=rap*(180.0/M_PI)/15.0;//rad->hours
-  decp=decp*(180.0/M_PI); // rad->degrees
-  mean_star(jd,rap,decp,accuracy,ra,dec); //for app->icrs (j2000)
-  *ra=(*ra)*15.0*(M_PI/180.0); // hours->radians
-  *dec=(*dec)*(M_PI/180.0); // degrees -> radians
-
-  return;
-}  
-/*
-  Function to rotate the antenna based (uvw) coordinates. Specifically the
-  coordinates are rotated twice, the first to undo the nutation correction
-  and then to undo the precession. Uses the novasc library calls.
-
-  novasc routines work in the equitorial frame, so the vectors need to be
-  rotated to the equitorial frame, corrected for precession and nutation and
-  then rotated back to the interferometric (i.e. uvw) frame. See init_mat()
-  for the matrix initializations for this. It is assumed that this
-  initialization has been done before this routine is called. Initialization
-  assumes that there is no change of the phase centre during
-  the observation.
-
-  To get to J2000 co-ordinates one also has to correct for the aberration,
-  this is treated as a shift and not a rotation, and is corrected by
-  puting the correct J2000 coordinates for the reference direction.
-
-
-  jnc may 2025
-*/
 #define MAT_VEC(A,v,v1){for(i1=0;i1<3;i1++){for(v1[i1]=0,j1=0;j1<3;j1++){v1[i1]+=A[i1][j1]*v[j1];}}}
-int prenut_uvw(SvSelectionType *user,BaseUvwType *uvw, double mjd){
-  double jd0,jd1,p0[3],p1[3];
-  int    i1,j1,k;// i1,j1 used in MAT_VEC, do *not* reuse.
-  short  int direction=1;// undo nutation to give mean coordinates
-  short  int accuracy=1; //reduced accuracy (good enough for GMRT)
-
-  jd0=2451545.0; //J2000
-  jd1=2400000.5+mjd; 
-  for(k=0;k<MAX_ANTS;k++){
-    p1[0]=uvw[k].u; p1[1]=uvw[k].v; p1[2]=uvw[k].w;
-    MAT_VEC(user->i2eapp,p1,p0);// rotate from UVW to equitorial frame
-    nutation(jd1,direction,accuracy,p0,p1);//undo nutation
-    precession(jd1,p1,jd0,p0);// undo precession (i.e. now J2000)
-    MAT_VEC(user->emean2i,p0,p1);// rotate from equitorial to UVW frame
-    uvw[k].u=p1[0]; uvw[k].v=p1[1]; uvw[k].w=p1[2];
-  }
-
-  return 0;
-}
-/*
-  function to initalize the rotation matrix for rotating the visibilities
-  to a new phase centre, as well as the lmn coordinates of the new phase
-  centre in the old coordinate system. Used in vis_recentre().
-
-  All uvw calculations are done in J2000, since it is assumed that the input
-  uvw coordinates to vis_recentre are in J2000. The actual rotation operation
-  is done on the visibilities after conversion to random group format. See
-  vis_recentre() for more details.
-
-  The lmn components of the vector connecting the new phase centre with the
-  old one are computed in both the J2000 frame, as well as the original
-  apparent coordinates frame. The former is used in vis_recentre(), while the
-  latter is meant for use in make_postcorr_beam(), where no rotation to J2000
-  is done.
-
-  jnc may 2025
-
-  fixed a inversion in the matrix multiplication order
-
-  jnc 14june 2025
-*/
-#define MAT_MAT(A,B,C){for(i1=0;i1<3;i1++){for(j1=0;j1<3;j1++){for(C[i1][j1]=0,k1=0;k1<3;k1++){C[i1][j1]+=A[i1][k1]*B[k1][j1];}}}}
-void init_mat(SvSelectionType *user){
-  ScanInfoType    *scan=user->srec->scan;
-  SourceParType   *source=&scan->source;
-  int              stokes=user->stokes;
-  BurstParType    *burst=&user->burst;
-  double           r0,d0,r1,d1,t;
-  double           m0[3][3],m1[3][3];
-  int              i1,j1,k1;
-  
-  // phase and burst beam centres in J2000 coordinates
-  app2j2000(source->ra_app,source->dec_app,user->recfile.mjd_ref,&r0,&d0); 
-  app2j2000(burst->ra_app,burst->dec_app,user->recfile.mjd_ref,&r1,&d1); 
-
-  //matrix to rotate from interferometric (uvw) axis to date equitorial axis
-  /* rotate from source(dec) to equitorial plane*/
-  t=(M_PI/2-source->dec_app);
-  m0[0][0]=1.0; m0[0][1]=0.0;     m0[0][2]= 0.0;
-  m0[1][0]=0.0; m0[1][1]=cos(t);  m0[1][2]=-sin(t);
-  m0[2][0]=0.0; m0[2][1]=sin(t);  m0[2][2]= cos(t);
-  /* rotate from source(ra) to ra=0.0 */
-  t=(M_PI/2.0+source->ra_app);
-  m1[0][0]=cos(t); m1[0][1]=-sin(t); m1[0][2]=0.0;
-  m1[1][0]=sin(t); m1[1][1]= cos(t); m1[1][2]=0.0;
-  m1[2][0]=0.0;    m1[2][1]= 0.0;    m1[2][2]=1.0;
-  MAT_MAT(m1,m0,user->i2eapp); // net rotation
-
-  //matrix to rotate from J2000 equitorial axis to interferometric axis
-  /* rotate from equitorial plane to source(dec) (NB indices transposed)*/
-  t=(M_PI/2-d0);
-  m0[0][0]=1.0; m0[1][0]=0.0;     m0[2][0]= 0.0;
-  m0[0][1]=0.0; m0[1][1]=cos(t);  m0[2][1]=-sin(t);
-  m0[0][2]=0.0; m0[1][2]=sin(t);  m0[2][2]= cos(t);
-  /* rotate from ra=0.0 to source(ra) (NB indices transposed)*/
-  t=(M_PI/2.0+r0);
-  m1[0][0]=cos(t); m1[1][0]=-sin(t); m1[2][0]=0.0;
-  m1[0][1]=sin(t); m1[1][1]= cos(t); m1[2][1]=0.0;
-  m1[0][2]=0.0;    m1[1][2]= 0.0;    m1[2][2]=1.0;
-  MAT_MAT(m0,m1,user->emean2i); //net rotation
-
-  if(!user->recentre) return;
-  
-  //set up the matrix to rotate visibility to new centre
-  user->rmat[0][0]=cos(r1-r0);
-  user->rmat[0][1]=sin(d0)*sin(r1-r0);
-  user->rmat[0][1]=-cos(d0)*sin(r1-r0);
-    
-  user->rmat[1][0]=sin(d0)*sin(r1-r0);
-  user->rmat[1][1]=sin(d0)*sin(d1)*cos(r1-r0)+cos(d0)*cos(d1);
-  user->rmat[1][2]=sin(d0-d1);
-    
-  user->rmat[2][0]=cos(d1)*sin(r1-r0);
-  user->rmat[2][1]=sin(d1)*cos(d0)-cos(d1)*sin(d0)*cos(r1-r0);
-  user->rmat[2][2]=cos(d0)*cos(d1)*cos(r1-r0)+sin(d0)*sin(d1);
-
-  //set up the source direction cosines in the original uvw basis at J2000.
-  // Used to correct the visibility phase in vis_recentre()
-  user->lmn[0]=cos(d1)*sin(r1-r0);
-  user->lmn[1]=sin(d1)*cos(d0)-cos(d1)*sin(d0)*cos(r1-r0);
-  user->lmn[2]=sqrt(1.0-user->lmn[0]*user->lmn[0]-user->lmn[1]*user->lmn[1]);
-
-  //set up the source direction cosines in the original uvw basis at DATE
-  // Used to correct the visibility phase in make_postcorr_beam()
-  r0=source->ra_app;d0=source->dec_app;
-  r1=burst->ra_app; d1=burst->dec_app;
-  user->lmn_a[0]=cos(d1)*sin(r1-r0);
-  user->lmn_a[1]=sin(d1)*cos(d0)-cos(d1)*sin(d0)*cos(r1-r0);
-  user->lmn_a[2]=sqrt(1.0-user->lmn_a[0]*user->lmn_a[0]-
-		      user->lmn_a[1]*user->lmn_a[1]);
-  
-
-  fprintf(user->lfp,"Rotating the visibilities to the Burst Beam Centre\n");
-
-  return;
-}
 /*
   rotate the uvw coordinates and correct the visibility phase to the
   burst beam centre in which the burst was found. See init_mat() for the
@@ -1289,7 +1143,7 @@ void vis_recentre(SvSelectionType *user, char *visbuf, int channels, unsigned lo
   int            g,c,s;
   int            i1,j1; //used in macro MAT_VEC, do *not* reuse
   double         uvw0[3],uvw1[3],re,im,cp,sp,dphs,dphs0;
-  double        *lmn=user->lmn;
+  double        *lmn=user->lmn_a;
   double         freq0,freq,chwd;
 
   //frequencies, coordinates etc
@@ -1297,7 +1151,7 @@ void vis_recentre(SvSelectionType *user, char *visbuf, int channels, unsigned lo
   chwd=source->ch_width*source->net_sign[0];
     
   group_size=sizeof(UvwParType)+sizeof(Cmplx3Type)*stokes*channels;
-#pragma omp parallel for num_threads(user->num_threads) private(g,uvwpar,uvw0,uvw1,vis,c,freq,dphs0,dphs,cp,sp,s,re,im)
+#pragma omp parallel for num_threads(user->num_threads) private(g,uvwpar,uvw0,uvw1,vis,c,freq,dphs0,dphs,cp,sp,s,re,im,i1,j1)
   for(g=0;g<groups;g++){
     uvwpar=(UvwParType*)(visbuf+g*group_size);
     uvw0[0]=uvwpar->u; uvw0[1]=uvwpar->v; uvw0[2]=uvwpar->w;
@@ -1321,15 +1175,22 @@ void vis_recentre(SvSelectionType *user, char *visbuf, int channels, unsigned lo
   }
   return;
 }
+#undef MAT_VEC
 /*
   compute the uvw coordinates. Modified from gvgetUvw in gvfits
 
   jnc mar25
 
   moved correction of the precession and nutation to this routine, so
-  that the output uvw coordinates from here are in J2000.
+  that the output uvw coordinates from here are in J2000, if user->epoch>0.0
   
   jnc may 2025
+
+  replaced the calculation of the hour angle with the full calculation
+  including dut1 and equation of the equinoxes, so that it is now identical
+  to what is done in the online software.
+
+  jnc june 2025
 */
 int svgetUvw(double tm, SvSelectionType *user, BaseUvwType *uvw)
 { SourceParType *source=&user->srec->scan->source;
@@ -1339,9 +1200,8 @@ int svgetUvw(double tm, SvSelectionType *user, BaseUvwType *uvw)
   double         bxch,bysh; 
   static double  C = 2.99792458e8 ; /* velocity of light in  m/s */
   int k ;
-
-  lst = lmst(mjd_ref + tm/86400) ;
-  ha = lst - source->ra_app;
+  
+  ha=get_ha(user,tm);  
   dec = source->dec_app;
 
   ch = cos(ha); sh = sin(ha) ;
@@ -1355,8 +1215,8 @@ int svgetUvw(double tm, SvSelectionType *user, BaseUvwType *uvw)
     uvw[k].v = (uvw[k].bz*cd - sd * (bxch - bysh) )/C ;   /* sec */
     uvw[k].w = (cd*(bxch - bysh) + sd*uvw[k].bz)/C  ;     /* sec */
   }
-  if(prenut_uvw(user,uvw,mjd_ref+tm/86400.0)) return -1;
-  else return 0;
+
+  return 0;
 }
 /*
   simulate visibilities. Assumes a point source at the location given by
@@ -1775,7 +1635,7 @@ int make_onechan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
   svgetUvw(tm,user,uvw);
   JD = user->recfile.mjd_ref + 2400000.5 + tm/86400 ;
   date1 = (int) JD ;
-  date2 = JD - date1+user->iatutc/86400 ; //CHECK IATUTC
+  date2 = JD - date1+user->iatutc/86400 ; 
   for(b=0;b<baselines;b+=vispar->vis_sets){//vis_sets==2
     VisInfoType *vinfo=vispar->visinfo;
     int ant0=vinfo[b].ant0,ant1=vinfo[b].ant1; //same for all base in set
@@ -1816,7 +1676,14 @@ int make_onechan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
       uvwpar->u = (uvw[ant1].u-uvw[ant0].u)*(freq/freq0);
       uvwpar->v = (uvw[ant1].v-uvw[ant0].v)*(freq/freq0);
       uvwpar->w = (uvw[ant1].w-uvw[ant0].w)*(freq/freq0);
-      epoch=2000.0; // uvw now always rotated to 2000.0
+      if(epoch>0.0){//rotate to J2000
+#ifdef USE_NOVAS
+      novas_prenut_vis(user,uvwpar,user->recfile.mjd_ref+tm/86400.0);
+#else
+      sla_prenut_vis(uvwpar,user->recfile.mjd_ref,source->ra_app,
+		    source->dec_app,2000.0);
+#endif
+      }
       uvwpar->date1 = date1 ;
       uvwpar->date2 = date2;
       uvwpar->baseline = ant0*256 + ant1 + 257 ;
@@ -1954,6 +1821,10 @@ int make_allchan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
   BpassType       *bpass=&user->bpass;
   ScanInfoType    *scan=user->srec->scan;
   SourceParType   *source=&scan->source;
+  RecFileParType  *rfile=&user->recfile;
+  int              rec_per_slice=rfile->rec_per_slice;
+  double           slice_interval=rfile->slice_interval;
+  double           integ=corr->daspar.lta*user->statime;
   double           epoch,epoch1=user->epoch;
   int              c,c0,c1,b,b1,s;
   unsigned long    copied;
@@ -1978,10 +1849,12 @@ int make_allchan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
   recl=corr->daspar.baselines*corr->daspar.channels*sizeof(float);
   c0=bpass->start_chan[r];c1=bpass->end_chan[r];
   rbuf1=rbuf+r*recl;
+  // SET TM AS PER CURRENT UNDERSTANDING JNC 2/OCT/25
+  tm=rfile->t_start[idx]+slice*rfile->slice_interval+(r+0.5)*integ; //middle of integ
   svgetUvw(tm,user,uvw);
   JD = user->recfile.mjd_ref + 2400000.5 + tm/86400.0;
   date1 = (int) JD ;
-  date2 = JD - date1+user->iatutc/86400 ; //CHECK IATUTC
+  date2 = JD - date1+user->iatutc/86400.0 ; 
 
   for(b=0;b<baselines;b+=vispar->vis_sets){//vis_sets==2
     VisInfoType *vinfo=vispar->visinfo;
@@ -2017,7 +1890,14 @@ int make_allchan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
     uvwpar->u = (uvw[ant1].u-uvw[ant0].u);
     uvwpar->v = (uvw[ant1].v-uvw[ant0].v);
     uvwpar->w = (uvw[ant1].w-uvw[ant0].w);
-    epoch=2000.0; // uvw now now always rotated to 2000.0
+    if(epoch>0.0){
+#ifdef USE_NOVAS
+      novas_prenut_vis(user,uvwpar,user->recfile.mjd_ref+tm/86400.0);
+#else
+      sla_prenut_vis(uvwpar,user->recfile.mjd_ref,source->ra_app,
+		     source->dec_app,2000.0);
+#endif
+    }
     uvwpar->date1 = date1 ;
     uvwpar->date2 = date2;
     uvwpar->baseline = ant0*256 + ant1 + 257 ;
@@ -2249,7 +2129,7 @@ int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
   svgetUvw(tm,user,uvw);
   JD = user->recfile.mjd_ref + 2400000.5 + tm/86400.0;
   date1 = (int) JD ;
-  date2 = JD - date1+user->iatutc/86400 ; //CHECK IATUTC
+  date2 = JD - date1+user->iatutc/86400 ; 
 
   if(user->do_flag){
     // select some random visibilities to compute statstics for flagging
@@ -2303,7 +2183,14 @@ int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
     uvwpar->u = (uvw[ant1].u-uvw[ant0].u);
     uvwpar->v = (uvw[ant1].v-uvw[ant0].v);
     uvwpar->w = (uvw[ant1].w-uvw[ant0].w);
-    epoch=2000.0; // uvw coordinates now always rotate to 2000.0
+    if(user->epoch>0){ //rotate to J2000
+#ifdef USE_NOVAS
+      novas_prenut_vis(user,uvwpar,user->recfile.mjd_ref+tm/86400.0);
+#else
+      sla_prenut_vis(uvwpar,user->recfile.mjd_ref,source->ra_app,
+		  source->dec_app,2000.0);
+#endif
+    }
     uvwpar->date1 = date1 ;
     uvwpar->date2 = date2;
     uvwpar->baseline = ant0*256 + ant1 + 257 ;

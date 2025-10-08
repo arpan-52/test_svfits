@@ -8,13 +8,22 @@ FC = gfortran
 CFLAGS = -fopenmp -g 
 #
 # Libraries
-CLIBS= -L /usr/lib/x86_64-linux-gnu/ -lz 
-STATIC_LIBS= /home/asoft/lib/libnovasc.a /home/asoft/lib/libcfitsio.a
-#
+#CLIBS= -L /usr/lib/x86_64-linux-gnu/ -lz
+
+#   USE_NOVAS=yes // NOT DEBUGGED DO NOT TURN ON!!!
+
+ifdef USE_NOVAS
+CC=gcc -DUSE_NOVAS
+STATIC_LIBS= libcfitsio.a libnovasc.a
+SVOBJ=svfits.o svsubs.o utils.o stats.o novas_prenut.o
+else
+STATIC_LIBS= libcfitsio.a libsla.a
+SVOBJ=svfits.o svsubs.o utils.o stats.o sla_prenut.o
+endif
+
 ALL= svfits 
 all:$(ALL)
 
-SVOBJ=svfits.o svsubs.o utils.o stats.o
 svfits:$(SVOBJ) svio.h  gmrt_newcorr.h
 	$(CC) $(CFLAGS) -o svfits $(SVOBJ) $(STATIC_LIBS) $(CLIBS)  -lm -lc
 clean :

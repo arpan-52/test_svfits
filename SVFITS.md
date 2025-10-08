@@ -2,7 +2,7 @@
 
 ## Overview
 
-svfits is a C utility  for conversion of the SPOTLIGHT raw 1.3ms visibility dump files into a multi-source random group UVFITS file. This can then be imported into standard interferometric imaging packages. The default mode is to identify the time-frequency subset of the data that contains the burst signal and convert only that data into a UVFITS file. This results in  the output file being significantly smaller than the input file
+svfits is a C utility  for conversion of the SPOTLIGHT raw 1.3ms visibility dump files into a multi-source random group UVFITS file. This can then be imported into standard interferometric imaging packages. The default mode is to identify the time-frequency subset of the data that contains the burst signal and convert only that data into a UVFITS file. This results in  the output file being significantly smaller than the input file. This note documents the usage for svfits-0.96.
 
 ## Background
 
@@ -10,7 +10,7 @@ The [SPOTLIGHT](https://spotlight.ncra.tifr.res.in/) system at the GMRT can be t
 
 The svfits utility reads the 16 time multiplexed data files as well as the associated metadata file and produces a random group UVFITS file which can be used by the imaging and localization pipeline.
 
-The default mode is to write out only those visibility timestamps and frequency channels that contain the burst signal. The time of arrival and DM of the burst is used to identify the time-frequency region that contains the burst signal. These visibilities are then converted from half-float to float, and written out as a single channel UVFITS file. The (u,v,w) coordinates are corrected to a standard reference frequency, and are also rotated to J2000. There are options for using the off source data near the location of the burst signal to do an "amplitude bandpass" (i.e. flatten the band response) as well as subtract off the "baseline" (as well as RFI). Use of these two options generally significantly improves the noise properties.
+The default mode is to write out only those visibility timestamps and frequency channels that contain the burst signal. The time of arrival and DM of the burst is used to identify the time-frequency region that contains the burst signal. These visibilities are then converted from half-float to float, and written out as a single channel UVFITS file. The (u,v,w) coordinates are corrected to a standard reference frequency, and can also be rotated to J2000. There are options for using the off source data near the location of the burst signal to do an "amplitude bandpass" (i.e. flatten the band response) as well as subtract off the "baseline" (as well as RFI). Use of these two options generally significantly improves the noise properties.
 
 Options to write out all of the channels for the records containing the burst signal, as well as to convert all of the dumped visibilities (i.e. irrespective of whether they contain the burst signal or not) to UVFITS are also provided. The last option would be useful for example in making an image containing bright background sources that could be used for astrometry.
 
@@ -36,7 +36,9 @@ The general format of the user parameter file (i.e. the one specified using the 
 
 - **HAVE_IDX** the first set of visibility dump files did not include the file index in the meta data. That meant that the file index (i.e. which in the set of 16 slices the data in this file corresponds to) had to be supplied by hand. Later (i.e. from June 2025) versions of the raw visibility files include the index in the meta-data. HAVE_IDX=0 is meant for processing historical data where the meta-data does not contain the index. The default is to assume that the file meta-data contains the index.
 
-- **N_SLICE** the number of slices of data to process from each file. This is relevant only when the **ALL_DATA** flag is set. The default is to process all slices.
+- **N_LTA**  The number of lta records to produce, each with an integration time as specified by the **LTA** parameter. This is used only in the **ALL_DATA** mode.
+
+- **LTA** The integration time for the output visibilities in seconds. This is used only in the **ALL_DATA** mode.
 
 - **FITS** The name of the output FITS file. By default it is "TEST.FITS". **Existing files will be overwritten!**
 
@@ -44,21 +46,23 @@ The general format of the user parameter file (i.e. the one specified using the 
 
 - **ALL_CHAN** copy all channels for records containing the burst signal to the output FITS file. In this case the output FITS file will have 4096 spectral channels. By default the output FITS file has only one channel. 
 
-- **ALL_DATA** convert all of the data into the UVFITS format, irrespective of the burst parameters. This could be useful to make a continuum map to identify background point sources that could be used for astrometry. To reduce the data size, all of the records in a given slice are averaged together in time. Averaging in frequency is also possible by setting NCHAV to > 1.
+- **ALL_DATA** convert all of the data into the UVFITS format, irrespective of the burst parameters. This could be useful to make a continuum map to identify background point sources that could be used for astrometry. To reduce the data size, all of the records in a given slice are averaged together in time to the integration time specified in** LTA **(seconds). Averaging in frequency is also possible by setting **NCHAV **to > 1.
 
 - **NCHAV** The number of channels to average together when creating the output UVFITS file. This applies only when the **ALL_DATA** flag is set.
 
-- IATUTC offset in seconds between IAT and UTC. The system has a built in default which can be over ridden here.
+- **IATUTC** offset in seconds between IAT and UTC. The system has a built in default which can be over ridden here.
 
-- **EPOCH**  No longer used. The output visibilities are forced to J2000
+- **EPOCH**  If this is set to any number > 0 then the output visibilities are rotated to the J2000 epoch. A number less than one leaves the output visibilities in the apparent coordinates at the date of the observation.
 
-- **OBS_MJD** the start MJD of the observation. 
+- **STOKES_TYPE** labells to attach to the visibility. "1" results in the visibilities being labelled as "XY", by default the visibilities are labelled "RL"
+
+- **OBS_MJD** the start MJD of the observation.  This parameter is depreciated and is no longer used. All times are obtained from the header of the raw visibility files.
 
 - **FREQ_SET**  The frequency setting, i.e. a colon separated frequency of the first, last channel (Hz) and the number of channels. For example 5.5e6:7.5e8:4096 for Band 4. In future this should be taken from the corr and scan structures.
 
 - **COORD_TYPE** No longer used
 
-- **RECENTRE** change the phase centre to the BURST_{RA,DEC}.
+- **RECENTRE** change the phase centre to the BURST_{RA,DEC}.  *This option has not been significantly tested and should be used with caution.*
 
 - **RA_APP** The apparent right ascension of the phase centre. In future this should be taken from the scan structure
 
@@ -90,9 +94,9 @@ The general format of the user parameter file (i.e. the one specified using the 
 
 - **BURST_BM_ID**  The id (i.e. number) of the beam in which the burst was detected
 
-- **BURST_RA** The right ascension of the beam in which the burst was detected. One could rotate the visibilities to this coordinate before imaging to minimize the w-term error.
+- **BURST_RA** The apparent right ascension of the beam in which the burst was detected. One could rotate the visibilities to this coordinate before imaging to minimize the w-term error.
 
-- **BURST_DEC** The declination of the beam in which the burst was detected. One could rotate the visibilities to this coordinate before imaging to minimize the w-term error.
+- **BURST_DEC** The apparent declination of the beam in which the burst was detected. One could rotate the visibilities to this coordinate before imaging to minimize the w-term error.
 
 - **UPDATE_BURST** update the remaining burst parameters using the BURST_MJD, BURST_INTWD and BURSt_DM
 
@@ -109,3 +113,5 @@ The general format of the user parameter file (i.e. the one specified using the 
 - **DROP_CSQ** (drop the visibilities between central square antennas, (actually antennas with numbers less than 11) when computing the post-correlation beam.
 
 - **NUM_THREADS** number of threads to use when parallelizing the more compute intensive parts of the code.
+
+- 

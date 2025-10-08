@@ -83,7 +83,7 @@ if __name__=='__main__':
     freq_start=freq_start/1.0e9 #GHz
     freq_end=freq_end/1.0e9  #GHz
     channels=np.frombuffer(rbuf[48:],dtype=np.int32,count=1)[0]
-
+    print(hdr_size,mjd,int_wd,DM,freq_start,freq_end,integ)
     #overwrite with user supplied values (if present)
     if args.dm is not None:
         DM=args.dm
@@ -101,7 +101,7 @@ if __name__=='__main__':
         rbuf=fp.read(bufsize)
         time_stamp[r]=np.frombuffer(rbuf,dtype=np.float64,count=1)[0]
         dyn_spc[r]=np.frombuffer(rbuf[8:],dtype=np.float32)
-
+        dyn_spc[np.isnan(dyn_spc)]=0.0
     # read in the data selection done by svfits
     chan0=np.zeros(n_rec)
     chan1=np.zeros(n_rec)
@@ -118,7 +118,7 @@ if __name__=='__main__':
         if not len(line):
             break # reached EoF
         word_list=line.split()
-        if word_list[0] != "COPY:File":
+        if not word_list or word_list[0] != "COPY:File":
             continue
         if r== n_rec:
             print("Warning:Trucated selection overplot");
