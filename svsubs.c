@@ -35,7 +35,7 @@ char *SvVarname[SvVars] =
 static double K0=4.15e-3; // DM constant in seconds
 
 float svVersion(void){//sets the version number for log and history
-  return 0.960;
+  return 0.970;
 }
 
 /*
