@@ -134,7 +134,7 @@ int novas_prenut_vis(SvSelectionType *user,UvwParType *uvw, double mjd){
   jnc 14june 2025
 */
 #define MAT_MAT(A,B,C){for(i1=0;i1<3;i1++){for(j1=0;j1<3;j1++){for(C[i1][j1]=0,k1=0;k1<3;k1++){C[i1][j1]+=A[i1][k1]*B[k1][j1];}}}}
-void init_mat(SvSelectionType *user){
+void init_mat(SvSelectionType *user, double tm){
   ScanInfoType    *scan=user->srec->scan;
   SourceParType   *source=&scan->source;
   int              stokes=user->stokes;
@@ -142,12 +142,12 @@ void init_mat(SvSelectionType *user){
   double           r0,d0,r1,d1,t;
   double           m0[3][3],m1[3][3];
   int              i1,j1,k1;
-  
+
   // phase and burst beam centres in J2000 coordinates
-  novas_app2j2000(source->ra_app,source->dec_app,user->recfile.mjd_ref,user->iatutc,
-	    &r0,&d0); 
-  novas_app2j2000(burst->ra_app,burst->dec_app,user->recfile.mjd_ref,user->iatutc,
-	    &r1,&d1); 
+  novas_app2j2000(source->ra_app,source->dec_app,user->recfile.mjd_ref+
+		  tm/86400,user->iatutc,&r0,&d0); 
+  novas_app2j2000(burst->ra_app,burst->dec_app,user->recfile.mjd_ref+
+		  tm/86400.0,user->iatutc,&r1,&d1); 
 
   //matrix to rotate from interferometric (uvw) axis to date equitorial axis
   /* rotate from source(dec) to equitorial plane*/

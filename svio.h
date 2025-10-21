@@ -241,7 +241,7 @@ int     get_file_order(SvSelectionType *user, int *order);
 double  get_ha(SvSelectionType *user, double tm);
 float   half_to_float(const unsigned short x);
 int     init_dut1tab(SvSelectionType *user, char *bulletinA);
-void    init_mat(SvSelectionType *user);
+void    init_mat(SvSelectionType *user, double tm);
 int     init_user(SvSelectionType *user, char *fname, char *anthdr,
 		  char *bhdrfile, char *bulletinA);
 double  lmst(double mjd);

@@ -1,10 +1,6 @@
-JNC 08/OCt/25
+JNC 21/OCt/25
 
-More testing and debugging done on the J2000 coordinates. The code has two compile time options (a) to use SLA to do the coordinate transformation or (b) to use NOVAS. The SLA version matches the positions obtained from the 1s LTA file, and  as such seems fine. Still more testing is needed for the NOVAS issues. There may be finer issues related to use of UTC instead of UT1 in computing the hour angle. If so, this correction would also need to be made to gvfits. At the moment there is the option to read in the BulletinA corrections to get the UTC to UT1 conversion, but it is not used.
-
-Also added the option of specifying an LTA time (in seconds) when converting all of the rawvisibility data to FITS (ALL_DATA option). This helps reduce the file size considerably. This is very useful when making a large scale image for finding background sources to check astrometry.
-
-This version also includes reading in of the binary corr and scan headers. However currently the Das pipeline appears to be filling wrong/incomplete information in these headers, so until that is resolved, one needs to seprately provide all of the meta data in the svfits_par.txt file. 
+More testing and debugging done on the J2000 coordinates. The code has two compile time options (a) to use SLA to do the coordinate transformation or (b) to use NOVAS. The SLA version matches the positions obtained from the 1s LTA file, and  as such seems fine. In this updated, the NOVAS routines also appear to be working fine. There may be finer issues related to use of UTC instead of UT1 in computing the hour angle. If so, this correction would also need to be made to gvfits. At the moment there is the option to read in the BulletinA corrections to get the UTC to UT1 conversion, but it is not used.
 
 Some details on the files in this commit are given below.
 
@@ -22,9 +18,9 @@ novascon.h header file for NOVASC
 
 novas.h    header file for NOVASC
 
-novas_prenut.c NOVAS based functions to do the precession/nutation etc.
+novas_prenut.c minor change, including IST offset when calling apparent to j2000 conversion. (Does not appear to have a measurable effect).
 
-nutation.h header file for NOVASC
+nutation.h header file for NOVAS
 
 plot_flagged.py  No change
 
@@ -36,22 +32,23 @@ read_rawvis.py No change. This needs to be updated to reflect the fact that the 
 
 solarsystem.h Header file for NOVASC
 
-sla_prenut.c  SLA based functions to do the precession/nutation etc.
+sla_prenut.c  No Change
 
-sla
 stats.c -- No change
 
 SVFITS.md  usage docummentation - updated to reflect changes.
 
-svfits.c -- changes associated with giving the option of using SLA/NOVAS and also integrating the data further in the ALL_DATA mode.
+svfits.c -- added printing a message to let the user know if SLA or NOVAS is being used.
 
 svfits.docx -- a brief report on svfits. updated  to reflect changes
 
 svfits_par.txt -- updated to include the relevant new options.
 
-svio.h -- small changes corresponding to the new options in svfits.
+svio.h -- update to the interface to init_mat() to allow for inclusion of IST time offset.
 
-svsubs.c -- added option of using SLA/NOVAS for the coordinate rotations, the SLA version compares very well with images from the 1s LTA file. Various other smaller changes.
+svsubs.c -- thread safe changes to include recomputation of the rotation matrix for every integration.
+
+utils.c  -- various utilities for computing hour angles etc. This has been part of svfits for some time, but some how did not get included in this Readme file. Made some changes to make the use of the DUT correction optional.
 
 
 

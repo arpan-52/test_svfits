@@ -35,7 +35,7 @@ char *SvVarname[SvVars] =
 static double K0=4.15e-3; // DM constant in seconds
 
 float svVersion(void){//sets the version number for log and history
-  return 0.970;
+  return 0.971;
 }
 
 /*
@@ -112,7 +112,8 @@ int svuserInp (char *filename, SvSelectionType *user ){
       case RaApp    :sscanf(p,"%lf",&user->srec->scan->source.ra_app);break;
       case DecApp   :sscanf(p,"%lf",&user->srec->scan->source.dec_app);break;
       case RaMean   :sscanf(p,"%lf",&user->srec->scan->source.ra_mean);break;
-      case DecMean  :sscanf(p,"%lf",&user->srec->scan->source.dec_mean);break;	      case StokesType: sscanf(p,"%hd",&user->stokes_type);break;
+      case DecMean  :sscanf(p,"%lf",&user->srec->scan->source.dec_mean);break;	      
+      case StokesType: sscanf(p,"%hd",&user->stokes_type);break;
       case BurstName:strcpy(user->burst.name,p);
 	             strcpy(user->srec->scan->source.object,user->burst.name);
 		     break;
@@ -672,7 +673,7 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile,
   rfile->mjd_ref=0.0;// computed when the first slice is read
   user->n_lta=-1;// process all slices (only used when all_data=1)
   user->n_dut1=0.0;// no dut1 correction available by default
-#ifdef DO_DUT1_CORR
+#ifdef DO_DUT_CORR
   init_dut1tab(user,bulletinA);
 #endif
   //override defaults with actual parameter settings in the binary header
@@ -709,7 +710,7 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile,
   if(user->num_threads<0)
     {fprintf(stderr,"Illegal NumThreads %d\n",user->num_threads); return -1;}
 #ifdef USE_NOVAS // do coordinate transformation using NOVAS instead of SLA
-  init_mat(user); // initialize matrices for J2000 conversion etc.
+  init_mat(user,0.0); // initialize matrices for J2000 conversion etc.
 #endif
   if(user->epoch<0 && user->recentre)
     {fprintf(stderr,"recentre works only for J2000 epoch"); return -1;}
@@ -1617,7 +1618,8 @@ int make_onechan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
   UvwParType      *uvwpar;
   Complex         *off_src;
   float           *abp,freq;
-  
+  SvSelectionType  user1; //local copy
+
   copied=copied0;//groups already copied
   recl=corr->daspar.baselines*corr->daspar.channels*sizeof(float);
   c0=bpass->start_chan[r];c1=bpass->end_chan[r];
@@ -1633,6 +1635,12 @@ int make_onechan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
 	    idx,slice,r,tm,c0,c1);
   if(c0<0 || c0>=channels) return 0; // record does not contain burst
   svgetUvw(tm,user,uvw);
+#ifdef USE_NOVAS
+  // initialize the rotation matrix to J2000 etc. Copy over to user1 to be
+  // thread safe.
+  memcpy(&user1,user,sizeof(SvSelectionType));
+  init_mat(&user1,tm); 
+#endif
   JD = user->recfile.mjd_ref + 2400000.5 + tm/86400 ;
   date1 = (int) JD ;
   date2 = JD - date1+user->iatutc/86400 ; 
@@ -1678,9 +1686,9 @@ int make_onechan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
       uvwpar->w = (uvw[ant1].w-uvw[ant0].w)*(freq/freq0);
       if(epoch>0.0){//rotate to J2000
 #ifdef USE_NOVAS
-      novas_prenut_vis(user,uvwpar,user->recfile.mjd_ref+tm/86400.0);
+	novas_prenut_vis(&user1,uvwpar,user->recfile.mjd_ref+tm/86400.0);//user1 to be thread safe;
 #else
-      sla_prenut_vis(uvwpar,user->recfile.mjd_ref,source->ra_app,
+	sla_prenut_vis(uvwpar,user->recfile.mjd_ref,source->ra_app,
 		    source->dec_app,2000.0);
 #endif
       }
@@ -1839,7 +1847,7 @@ int make_allchan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
   UvwParType      *uvwpar;
   Complex         *off_src;
   float           *abp;
-
+  SvSelectionType user1;
   if(user->postcorr)
     if(make_postcorr_beam(user,rbuf,r,tm,uvw)) return -1;
 
@@ -1852,6 +1860,10 @@ int make_allchan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
   // SET TM AS PER CURRENT UNDERSTANDING JNC 2/OCT/25
   tm=rfile->t_start[idx]+slice*rfile->slice_interval+(r+0.5)*integ; //middle of integ
   svgetUvw(tm,user,uvw);
+#ifdef USE_NOVAS
+  memcpy(&user1,user,sizeof(SvSelectionType)); // just to be thread safe
+  init_mat(&user1,tm);// initialize the rotation matrix to J2000 etc.
+#endif
   JD = user->recfile.mjd_ref + 2400000.5 + tm/86400.0;
   date1 = (int) JD ;
   date2 = JD - date1+user->iatutc/86400.0 ; 
@@ -1892,7 +1904,7 @@ int make_allchan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
     uvwpar->w = (uvw[ant1].w-uvw[ant0].w);
     if(epoch>0.0){
 #ifdef USE_NOVAS
-      novas_prenut_vis(user,uvwpar,user->recfile.mjd_ref+tm/86400.0);
+      novas_prenut_vis(&user1,uvwpar,user->recfile.mjd_ref+tm/86400.0);
 #else
       sla_prenut_vis(uvwpar,user->recfile.mjd_ref,source->ra_app,
 		     source->dec_app,2000.0);
@@ -2100,7 +2112,9 @@ int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
   Cmplx3Type      *out;
   FILE            *lfp=user->lfp,*fp;
   VisSelType       selvis[SampleSize];
+  SvSelectionType  user1; // local copy
     
+
     
   if (baselines < 1)
     {fprintf(stderr,"Illegal Nbaselines %d\n",baselines); return -1 ;}
@@ -2114,8 +2128,8 @@ int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
 
   // copy over the X,Y,Z co-ordinates into a local array for computing
   // u,v,w later
-  for (i=0; i<MAX_ANTS; i++)
-  { uvw[i].bx = user->corr->antenna[i].bx ;
+  for (i=0; i<MAX_ANTS; i++){
+    uvw[i].bx = user->corr->antenna[i].bx ;
     uvw[i].by = user->corr->antenna[i].by ;
     uvw[i].bz = user->corr->antenna[i].bz ;
   }
@@ -2127,6 +2141,10 @@ int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
   tm= rfile->t_start[idx]+slice*rfile->slice_interval;
   tm+=user->timestamp_off+rec_per_slice*(integ/2); // middle of the slice
   svgetUvw(tm,user,uvw);
+#ifdef USE_NOVAS
+  memcpy(&user1,user,sizeof(SvSelectionType)); // just to be thread safe
+  init_mat(&user1,tm);// initialize the rotation matrix to J2000 etc.
+#endif
   JD = user->recfile.mjd_ref + 2400000.5 + tm/86400.0;
   date1 = (int) JD ;
   date2 = JD - date1+user->iatutc/86400 ; 
@@ -2185,7 +2203,7 @@ int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
     uvwpar->w = (uvw[ant1].w-uvw[ant0].w);
     if(user->epoch>0){ //rotate to J2000
 #ifdef USE_NOVAS
-      novas_prenut_vis(user,uvwpar,user->recfile.mjd_ref+tm/86400.0);
+      novas_prenut_vis(&user1,uvwpar,user->recfile.mjd_ref+tm/86400.0); //user1 to be thread safe
 #else
       sla_prenut_vis(uvwpar,user->recfile.mjd_ref,source->ra_app,
 		  source->dec_app,2000.0);
@@ -2205,6 +2223,6 @@ int avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
 	    baselines*channels*rec_per_slice);
   }
   if(user->recentre)// move phase centre to burst beam centre
-    vis_recentre(user, obuf,user->channels, n_group);
+    vis_recentre(&user1, obuf,user->channels, n_group); //user1 to be thread safe
   return n_group; // total number of groups
 }

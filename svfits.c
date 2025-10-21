@@ -928,6 +928,11 @@ int main(int argc, char **argv)
  
   fprintf(stdout,"     ----- SVFITS  version %.4f  -----  \n",svVersion()) ;
   fprintf(stdout,"FITSIO version number = %f\n",ffvers(&version));
+#ifdef USE_NOVAS
+  fprintf(stdout,"Using NOVAS routines for any coordinate transformations\n");
+#else
+  fprintf(stdout,"Using SLA routines for any coordinate transformations\n");
+#endif
 
   //initalize the data structures
   user.hdr=(InitHdrType*)malloc(sizeof(InitHdrType));

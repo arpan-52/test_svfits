@@ -240,6 +240,7 @@ double get_ha(SvSelectionType *user, double tm){
   dut1 = get_dut1(user,mjd_ref+tm/86400.0);
   user->corr->daspar.dut1 = dut1; // seconds
 #else
+  dut1=0.0;
   user->corr->daspar.dut1=0.0;
 #endif
 
