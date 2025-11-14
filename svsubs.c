@@ -35,7 +35,7 @@ char *SvVarname[SvVars] =
 static double K0=4.15e-3; // DM constant in seconds
 
 float svVersion(void){//sets the version number for log and history
-  return 0.971;
+  return 0.972;
 }
 
 /*
@@ -181,7 +181,8 @@ int init_vispar(SvSelectionType *user){
 
   // organize so that the output visibilities are in antenna collation order
   // and that baselines with the same antenna pair but different stokes are
-  // next to each other. 
+  // next to each other.  The sign of the imaginary component is set depending
+  // on the antenna index order as well as whether it is USB/LSB
   for(bs1=0,ant0=0;ant0<antennas;ant0++){
     if(!(1<<ant0&antmask)) continue;
     for(ant1=ant0+1;ant1<antennas;ant1++){//avoid self
@@ -193,7 +194,8 @@ int init_vispar(SvSelectionType *user){
 	  a1=base[bs].samp[1].ant_id;b1=base[bs].samp[1].band;
 	  if((b0!=band) ||(b1!=band)) continue;
 	  if(ant0==a0 && ant1==a1){
-	    visinfo[bs1].flip=1; // REVERSED ON 26/SEP/25 TO CHECK BURST COORDINATES
+	    if(source->net_sign[0]<0) visinfo[bs1].flip=0; 
+	    else  visinfo[bs1].flip=1; 
 	    visinfo[bs1].ant0=ant0;visinfo[bs1].ant1=ant1;
 	    visinfo[bs1].band0=b0;visinfo[bs1].band1=b1;
 	    visinfo[bs1].drop=0; 
@@ -201,7 +203,8 @@ int init_vispar(SvSelectionType *user){
 	    bs1++;break;
 	  }else{
 	    if(ant0==a1 && ant1==a0){
-	      visinfo[bs1].flip=0;
+	      if(source->net_sign[0]<0) visinfo[bs1].flip=1;
+	      else visinfo[bs1].flip=0;
 	      visinfo[bs1].ant0=ant0;visinfo[bs1].ant1=ant1;
 	      visinfo[bs1].band0=b0;visinfo[bs1].band1=b1;
 	      visinfo[bs1].drop=0; 
