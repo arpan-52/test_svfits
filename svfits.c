@@ -682,10 +682,13 @@ int copy_burst(SvSelectionType *user, fitsfile *fptr){
   long            k, group_size, rbufsize;
   int             recl, status=0;
   int             gcount;
-  int             b, i, t, idx, rec, slice;
+  int             b, i, t, j, tt, idx, rec, slice;
   int             n_files, file_order[MaxRecFiles];
+  int             n_rec_tmp, start_rec_tmp;
+  int             num_threads;
   char          **rbufs;           // array of raw buffers, one per file
   TimeSlotType   *slots;           // array of time slots
+  BpassType      *bpass_arr;       // per-thread bandpass structures
   int             total_slots;     // total number of time slots to process
   int             max_slots;       // max possible slots
   int             error_flag=0;
@@ -703,10 +706,10 @@ int copy_burst(SvSelectionType *user, fitsfile *fptr){
   max_slots = 0;
   for(i=0; i<n_files; i++){
     idx = file_order[i];
-    int n_rec = rfile->n_rec[idx];
-    int start_rec = rfile->start_rec[idx];
+    n_rec_tmp = rfile->n_rec[idx];
+    start_rec_tmp = rfile->start_rec[idx];
     // count slices for this file
-    for(rec=start_rec; rec<start_rec+n_rec; rec+=rec_per_slice)
+    for(rec=start_rec_tmp; rec<start_rec_tmp+n_rec_tmp; rec+=rec_per_slice)
       max_slots++;
   }
 
@@ -725,14 +728,14 @@ int copy_burst(SvSelectionType *user, fitsfile *fptr){
   total_slots = 0;
   for(i=0; i<n_files; i++){
     idx = file_order[i];
-    int start_rec = rfile->start_rec[idx];
-    int n_rec = rfile->n_rec[idx];
-    for(rec=start_rec; rec<start_rec+n_rec; rec+=rec_per_slice){
+    start_rec_tmp = rfile->start_rec[idx];
+    n_rec_tmp = rfile->n_rec[idx];
+    for(rec=start_rec_tmp; rec<start_rec_tmp+n_rec_tmp; rec+=rec_per_slice){
       slice = rec / rec_per_slice;
       slots[total_slots].file_idx = idx;
       slots[total_slots].slice = slice;
-      slots[total_slots].start_rec = start_rec;
-      slots[total_slots].n_rec = n_rec;
+      slots[total_slots].start_rec = start_rec_tmp;
+      slots[total_slots].n_rec = n_rec_tmp;
       slots[total_slots].global_idx = slice * nfiles + idx;  // round-robin time index
       slots[total_slots].visbuf = NULL;
       slots[total_slots].error = 0;
@@ -748,7 +751,7 @@ int copy_burst(SvSelectionType *user, fitsfile *fptr){
   fprintf(stderr, "Processing %d time slots in chronological order\n", total_slots);
 
   // Allocate raw buffers - one per thread for parallel processing
-  int num_threads = user->num_threads > 0 ? user->num_threads : 1;
+  num_threads = user->num_threads > 0 ? user->num_threads : 1;
   if(num_threads > total_slots) num_threads = total_slots;
 
   if((rbufs = (char**)malloc(num_threads * sizeof(char*))) == NULL){
@@ -759,7 +762,7 @@ int copy_burst(SvSelectionType *user, fitsfile *fptr){
   for(t=0; t<num_threads; t++){
     if((rbufs[t] = malloc(rbufsize)) == NULL){
       fprintf(stderr, "Malloc error for rbuf[%d]\n", t);
-      for(int j=0; j<t; j++) free(rbufs[j]);
+      for(j=0; j<t; j++) free(rbufs[j]);
       free(rbufs);
       free(slots);
       return -1;
@@ -771,7 +774,7 @@ int copy_burst(SvSelectionType *user, fitsfile *fptr){
   baselines = user->baselines;
 
   // Allocate per-thread bandpass structures
-  BpassType *bpass_arr = (BpassType*)calloc(num_threads, sizeof(BpassType));
+  bpass_arr = (BpassType*)calloc(num_threads, sizeof(BpassType));
   if(bpass_arr == NULL){
     fprintf(stderr, "Malloc error for bpass array\n");
     for(t=0; t<num_threads; t++) free(rbufs[t]);
@@ -798,7 +801,7 @@ int copy_burst(SvSelectionType *user, fitsfile *fptr){
 
   if(error_flag){
     // cleanup on error
-    for(int tt=0; tt<=t; tt++){
+    for(tt=0; tt<=t; tt++){
       for(b=0; b<baselines; b++){
         if(bpass_arr[tt].off_src[b]) free(bpass_arr[tt].off_src[b]);
         if(bpass_arr[tt].abp[b]) free(bpass_arr[tt].abp[b]);
@@ -813,15 +816,20 @@ int copy_burst(SvSelectionType *user, fitsfile *fptr){
 
   // PHASE 1: Process all time slots in parallel
   // Each thread processes slots and stores results in slots[i].visbuf
-  #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
+  #pragma omp parallel for num_threads(num_threads) schedule(dynamic) \
+    private(i) shared(slots, rbufs, user, group_size, total_slots)
   for(i=0; i<total_slots; i++){
-    int tid = 0;
+    int tid, groups, flagged_cnt;
+    char *rbuf;
+    TimeSlotType *slot;
+
+    tid = 0;
     #ifdef _OPENMP
     tid = omp_get_thread_num();
     #endif
 
-    char *rbuf = rbufs[tid];
-    TimeSlotType *slot = &slots[i];
+    rbuf = rbufs[tid];
+    slot = &slots[i];
 
     // Temporarily point user->bpass to thread-local bpass
     // (Note: this is a workaround - ideally copy_vis would take bpass as param)
@@ -835,8 +843,8 @@ int copy_burst(SvSelectionType *user, fitsfile *fptr){
     }
 
     // Process the slice - copy_vis allocates slot->visbuf
-    int groups = copy_vis(user, slot->file_idx, slot->slice,
-                          slot->start_rec, slot->n_rec, rbuf, &slot->visbuf);
+    groups = copy_vis(user, slot->file_idx, slot->slice,
+                      slot->start_rec, slot->n_rec, rbuf, &slot->visbuf);
     if(groups < 0){
       slot->error = 2;
       continue;
@@ -846,12 +854,12 @@ int copy_burst(SvSelectionType *user, fitsfile *fptr){
 
     // Apply flagging if enabled
     if(!user->all_chan && user->do_flag){
-      int flagged = clip(slot->visbuf, user, slot->file_idx, slot->slice, groups);
-      if(flagged < 0){
+      flagged_cnt = clip(slot->visbuf, user, slot->file_idx, slot->slice, groups);
+      if(flagged_cnt < 0){
         slot->error = 3;
         continue;
       }
-      slot->flagged = flagged;
+      slot->flagged = flagged_cnt;
     }
 
     // Byte swap if needed (do it here so writing is fast)
