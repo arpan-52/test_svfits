@@ -8,7 +8,18 @@ set(CMAKE_C_STANDARD 99)
 
 # Options
 option(USE_NOVAS "Use NOVAS library for coordinate transforms" ON)
-set(NOVAS_PATH "$ENV{HOME}/chengalur" CACHE PATH "Path to NOVAS library")
+set(NOVAS_PATH "" CACHE PATH "Path to NOVAS library (containing libnovasc.a, novas.h)")
+
+# Check NOVAS_PATH is set when USE_NOVAS is ON
+if(USE_NOVAS AND NOT NOVAS_PATH)
+    message(FATAL_ERROR
+        "USE_NOVAS is ON but NOVAS_PATH is not set.\n"
+        "Please specify the path to NOVAS library:\n"
+        "  cmake .. -DNOVAS_PATH=/path/to/novas\n"
+        "Or disable NOVAS:\n"
+        "  cmake .. -DUSE_NOVAS=OFF"
+    )
+endif()
 
 # Find CUDA
 find_package(CUDAToolkit REQUIRED)
