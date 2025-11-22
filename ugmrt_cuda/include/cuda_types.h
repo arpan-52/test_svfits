@@ -1,6 +1,13 @@
 /**
  * @file cuda_types.h
  * @brief Common types for CUDA-based uGMRT imager
+ *
+ * This implementation is designed to match HPG (Hyperion Polyphase Gridder)
+ * exactly in terms of:
+ *   - CF format (6D complex array)
+ *   - UV coordinate computation
+ *   - W-term conjugation
+ *   - Weight accumulation
  */
 
 #ifndef CUDA_TYPES_H
@@ -14,35 +21,73 @@ extern "C" {
 #endif
 
 //-----------------------------------------------------------------------------
-// Visibility data structure
+// Visibility data structure (matches HPG VisData)
 //-----------------------------------------------------------------------------
 
 /**
  * @brief Single visibility for gridding
+ *
+ * This matches HPG's VisData structure with the essential fields.
  */
 typedef struct {
     float re, im;           // Visibility value (real, imaginary)
     float weight;           // Weight (negative = flagged)
     float u, v, w;          // UVW coordinates in wavelengths
+    float freq;             // Frequency in Hz (for computing inv_lambda)
+    float d_phase;          // Phase angle for phasor
     int channel;            // Frequency channel index
+    int cf_cube;            // CF cube index (e.g., W-plane)
+    int cf_grp;             // CF group index (for variable-size CF)
+    int grid_cube;          // Grid cube index
+    float phase_grad_u;     // Phase gradient in U
+    float phase_grad_v;     // Phase gradient in V
 } CudaVisibility;
 
 //-----------------------------------------------------------------------------
-// Convolution function (gridding kernel)
+// Convolution function (HPG-compatible format)
 //-----------------------------------------------------------------------------
 
 /**
- * @brief Convolution function for gridding
+ * @brief HPG-compatible convolution function
  *
- * The CF is stored as a 2D oversampled array.
- * For a support of S and oversampling of O:
- *   - Full size = (2*S + 1) * O per axis
- *   - Values are real (can extend to complex if needed)
+ * HPG CF format is 6D complex array:
+ *   [x_major, y_major, mueller, cube, x_minor, y_minor]
  *
- * To look up CF value at fractional position (fx, fy):
- *   idx_x = (int)(fx * oversampling) + support * oversampling
- *   idx_y = (int)(fy * oversampling) + support * oversampling
- *   cf_value = values[idx_y * full_size + idx_x]
+ * Where:
+ *   - x_major, y_major: Grid cell index (0 to 2*support+1 + padding)
+ *   - mueller: Polarization product index
+ *   - cube: CF cube (e.g., W-plane, baseline class, etc.)
+ *   - x_minor, y_minor: Oversampling index (0 to oversampling-1)
+ *
+ * For simple use (single cube, single mueller), this reduces to:
+ *   cf[x_major][y_major][0][0][x_minor][y_minor]
+ *
+ * Memory layout (row-major, fastest varying last):
+ *   Linear index = x_major * stride_x_major + y_major * stride_y_major + ...
+ */
+typedef struct {
+    int support;            // Half-width in pixels (cf_radius)
+    int oversampling;       // Oversampling factor
+    int padding;            // CF padding (typically 0 or 1)
+    int n_mueller;          // Number of Mueller elements
+    int n_cube;             // Number of CF cubes (e.g., W-planes)
+    int cf_size;            // Full CF support size (2*support + 1)
+
+    // Strides for 6D indexing (in complex elements)
+    int stride_x_major;
+    int stride_y_major;
+    int stride_mueller;
+    int stride_cube;
+    int stride_x_minor;
+    int stride_y_minor;
+
+    cuFloatComplex* d_values;  // Complex CF values on GPU
+    cuFloatComplex* h_values;  // Complex CF values on host
+    size_t n_values;           // Total number of complex values
+} HPGConvolutionFunction;
+
+/**
+ * @brief Simple real-valued CF (for backward compatibility)
  */
 typedef struct {
     int support;            // Half-width in pixels (e.g., 7)

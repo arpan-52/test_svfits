@@ -1,6 +1,18 @@
 /**
  * @file cuda_gridder.h
  * @brief CUDA gridding functions
+ *
+ * This module provides two gridding implementations:
+ *   1. Simple gridding with real-valued CF (backward compatible)
+ *   2. HPG-compatible gridding with complex 6D CF (matches libhpg exactly)
+ *
+ * HPG compatibility includes:
+ *   - 6D complex CF format [x_major, y_major, mueller, cube, x_minor, y_minor]
+ *   - UV coordinate computation matching HPG compute_vis_coord
+ *   - W-term conjugation (cf_im_factor = pos_w ? -1 : 1)
+ *   - Phase screen support
+ *   - Phasor application (vis * phasor * weight)
+ *   - Weight accumulation as sum(|CF|) * vis_weight
  */
 
 #ifndef CUDA_GRIDDER_H
@@ -13,11 +25,11 @@ extern "C" {
 #endif
 
 //-----------------------------------------------------------------------------
-// Convolution function management
+// Simple CF management (backward compatibility)
 //-----------------------------------------------------------------------------
 
 /**
- * @brief Create convolution function from data
+ * @brief Create simple real-valued convolution function
  * @param support Half-width in pixels
  * @param oversampling Oversampling factor
  * @param values CF values [(2*support+1)*oversamp]^2, row-major
@@ -26,7 +38,7 @@ extern "C" {
 ConvolutionFunction cf_create(int support, int oversampling, const float* values);
 
 /**
- * @brief Load convolution function from binary file
+ * @brief Load simple convolution function from binary file
  *
  * File format:
  *   int32: support
@@ -36,9 +48,53 @@ ConvolutionFunction cf_create(int support, int oversampling, const float* values
 ConvolutionFunction cf_load(const char* filename);
 
 /**
- * @brief Free convolution function
+ * @brief Free simple convolution function
  */
 void cf_free(ConvolutionFunction* cf);
+
+//-----------------------------------------------------------------------------
+// HPG-compatible CF management
+//-----------------------------------------------------------------------------
+
+/**
+ * @brief Create HPG-compatible complex 6D convolution function
+ *
+ * HPG CF layout: [x_major, y_major, mueller, cube, x_minor, y_minor]
+ *
+ * @param support Half-width in pixels (cf_radius)
+ * @param oversampling Oversampling factor
+ * @param padding CF padding (typically 0 or oversampling)
+ * @param n_mueller Number of Mueller elements (polarization products)
+ * @param n_cube Number of CF cubes (e.g., W-planes)
+ * @param values Complex CF values in HPG layout
+ * @return HPGConvolutionFunction with data copied to GPU
+ */
+HPGConvolutionFunction hpg_cf_create(
+    int support,
+    int oversampling,
+    int padding,
+    int n_mueller,
+    int n_cube,
+    const cuFloatComplex* values
+);
+
+/**
+ * @brief Load HPG-compatible CF from binary file
+ *
+ * File format:
+ *   int32: support
+ *   int32: oversampling
+ *   int32: padding
+ *   int32: n_mueller
+ *   int32: n_cube
+ *   complex[]: values in HPG 6D layout
+ */
+HPGConvolutionFunction hpg_cf_load(const char* filename);
+
+/**
+ * @brief Free HPG convolution function
+ */
+void hpg_cf_free(HPGConvolutionFunction* cf);
 
 //-----------------------------------------------------------------------------
 // Grid management
@@ -117,6 +173,42 @@ void grid_shift(UVGrid* grid);
  * @param cf Convolution function (for correction computation)
  */
 void grid_correct(UVGrid* grid, const ConvolutionFunction* cf);
+
+//-----------------------------------------------------------------------------
+// HPG-compatible gridding operations
+//-----------------------------------------------------------------------------
+
+/**
+ * @brief Grid visibilities using HPG-compatible algorithm
+ *
+ * This function matches HPG (libhpg) gridding exactly:
+ *   - UV coords: position = grid_scale * coord * inv_lambda + grid_size/2
+ *   - CF index computation with padding and fine offset
+ *   - W-term conjugation: cf.imag *= (w > 0) ? -1 : 1
+ *   - Phase screen: cphase(phi_X + phi_Y)
+ *   - Phasor: vis * phasor * weight before scattering
+ *   - Weight: sum(|CF|) * vis_weight
+ *
+ * @param grid UV grid to accumulate into
+ * @param vis Array of visibilities (with HPG fields populated)
+ * @param n_vis Number of visibilities
+ * @param cf HPG-compatible convolution function
+ * @param scale_u Grid scale factor for U (radians -> pixels)
+ * @param scale_v Grid scale factor for V (radians -> pixels)
+ */
+void grid_visibilities_hpg(
+    UVGrid* grid,
+    const CudaVisibility* vis,
+    int n_vis,
+    const HPGConvolutionFunction* cf,
+    float scale_u,
+    float scale_v
+);
+
+/**
+ * @brief Apply gridding correction using HPG CF
+ */
+void grid_correct_hpg(UVGrid* grid, const HPGConvolutionFunction* cf);
 
 #ifdef __cplusplus
 }

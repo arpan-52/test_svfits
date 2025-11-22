@@ -2,6 +2,8 @@
 
 Raw CUDA implementation for direct visibility-to-image pipeline. No Kokkos or HPG dependencies - just CUDA toolkit and cuFFT.
 
+**HPG Compatibility**: This implementation matches HPG (Hyperion Polyphase Gridder) exactly in terms of gridding algorithm, CF format, and coordinate computation.
+
 ## Overview
 
 Pipeline:
@@ -11,11 +13,12 @@ Raw uGMRT data → svfits processing → CUDA gridding → cuFFT → Image
 
 ## Features
 
+- **HPG-compatible gridding**: Matches libhpg exactly (same algorithm, same results)
 - **Raw CUDA kernels**: Direct GPU programming, no abstraction layers
 - **Full svfits processing**: Burst finding, bandpass, baseline sub, RFI flagging
 - **cuFFT acceleration**: GPU-accelerated 2D FFT
 - **Minimal dependencies**: CUDA toolkit + CFITSIO only
-- **User-supplied CF**: Bring your own convolution kernel
+- **User-supplied CF**: Bring your own convolution kernel in HPG format
 
 ## Requirements
 
@@ -76,7 +79,28 @@ Optional:
   --no-flag        Disable RFI flagging
 ```
 
-## Convolution Function Format
+## Convolution Function Formats
+
+### HPG-Compatible Format (recommended)
+
+The HPG format uses 6D complex arrays matching libhpg exactly:
+
+```
+int32:  support        (half-width in pixels, e.g., 7)
+int32:  oversampling   (e.g., 128)
+int32:  padding        (CF padding, typically 0)
+int32:  n_mueller      (number of Mueller elements)
+int32:  n_cube         (number of CF cubes, e.g., W-planes)
+complex[]: values      [x_major, y_major, mueller, cube, x_minor, y_minor]
+```
+
+HPG CF dimensions:
+- x_major, y_major: (2*support + 1) + 2*padding
+- mueller: n_mueller
+- cube: n_cube
+- x_minor, y_minor: oversampling
+
+### Simple Format (backward compatibility)
 
 Binary file format:
 ```
@@ -191,6 +215,48 @@ ugmrt_cuda/
 ├── tools/
 │   └── generate_cf.c      # CF generator
 └── svfits/                # Original svfits C code
+```
+
+## HPG Compatibility
+
+This CUDA implementation matches libhpg (Hyperion Polyphase Gridder) exactly:
+
+### Algorithm Match
+
+| Feature | HPG (libhpg) | This Implementation |
+|---------|--------------|---------------------|
+| UV coordinate computation | `position = grid_scale * coord * inv_lambda + g_size/2` | Same |
+| Grid coordinate | `round(position) - cf_radius` | Same |
+| CF minor index | `fine_offset >= 0 ? fine_offset : oversampling + fine_offset` | Same |
+| W-term conjugation | `cf.imag *= (w > 0) ? -1 : 1` | Same |
+| Phase screen | `cphase(phi_X + phi_Y)` | Same |
+| Phasor application | `vis * phasor * weight` | Same |
+| Weight accumulation | `sum(|CF|) * vis_weight` | Same |
+| Atomic grid update | `atomicAdd(&grid.real, ...), atomicAdd(&grid.imag, ...)` | Same |
+
+### CF Format Match
+
+HPG CF arrays are 6D:
+```
+[x_major, y_major, mueller, cube, x_minor, y_minor]
+```
+
+Our `HPGConvolutionFunction` struct stores the same layout with explicit strides for direct indexing.
+
+### Visibility Fields (matching HPG VisData)
+
+```c
+typedef struct {
+    float re, im;           // Visibility value
+    float weight;           // Weight
+    float u, v, w;          // UVW coordinates (wavelengths)
+    float freq;             // Frequency (Hz)
+    float d_phase;          // Phase for phasor
+    int cf_cube;            // CF cube index (W-plane)
+    int cf_grp;             // CF group index
+    int grid_cube;          // Grid cube index
+    float phase_grad_u, phase_grad_v;  // Phase gradients
+} CudaVisibility;
 ```
 
 ## License
