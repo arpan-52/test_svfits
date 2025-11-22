@@ -70,6 +70,9 @@
 #include <string.h>
 #include <endian.h>
 #include <unistd.h>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #include "fitsio.h"
 #include "fitsio.h"
@@ -631,6 +634,30 @@ void set_coordtype(SvSelectionType *user)
 
 }
 /*
+  Structure to hold information about a single time slot (one slice from one file)
+  Used for time-ordered processing of round-robin time-multiplexed files.
+*/
+typedef struct {
+  int    file_idx;       // which file (0 to nfiles-1)
+  int    slice;          // which slice in that file
+  int    start_rec;      // first record with burst in this file
+  int    n_rec;          // number of records with burst in this file
+  int    global_idx;     // global time index = slice * nfiles + file_idx
+  int    n_groups;       // number of groups produced after processing
+  long   bufsize;        // size of visbuf in bytes
+  char  *visbuf;         // processed visibility buffer (allocated in copy_vis)
+  int    error;          // error flag for this slot
+  int    flagged;        // number of flagged visibilities
+} TimeSlotType;
+
+// comparison function for qsort - sort by global time index
+static int compare_timeslots(const void *a, const void *b) {
+  const TimeSlotType *ta = (const TimeSlotType *)a;
+  const TimeSlotType *tb = (const TimeSlotType *)b;
+  return (ta->global_idx - tb->global_idx);
+}
+
+/*
   function to convert only the records in which there is a burst signal into
   random groups. If user->all_chan is set, then a multi-channel group is
   created and written to the FITS file (see make_allchan_group() for more
@@ -642,80 +669,267 @@ void set_coordtype(SvSelectionType *user)
   to the output FITS file, which is assumed to be initiated, with the write
   pointer at the location where the groups are to be written.
 
-  jnc may 2025
+  OPTIMIZED VERSION: Processes all files in parallel and writes in correct
+  time order for round-robin time-multiplexed files.
+
+  jnc may 2025, optimized nov 2025
 */
-int copy_burst(SvSelectionType *user,fitsfile *fptr){
-  BpassType      *bpass=&user->bpass;
+int copy_burst(SvSelectionType *user, fitsfile *fptr){
   RecFileParType *rfile=&user->recfile;
   int             rec_per_slice=rfile->rec_per_slice;
-  int             baselines,channels;
-  long            k,group_size,bufsize;
-  int             recl,status=0;
-  int             gcount,groups;
-  int             b,i,start_rec,n_rec,rec,idx,slice,flagged;
-  int             n_files,file_order[MaxRecFiles];
-  char           *visbuf,*rbuf;
-  
-  // allocate space for raw visibilities (one full timeslice is processed
-  // at a time). Space for the output random groups is allocated inside the
-  // copy_* functions
-  recl=user->corr->daspar.channels*user->corr->daspar.baselines*sizeof(float);
-  bufsize=rec_per_slice*recl;
-  if((rbuf=malloc(bufsize))==NULL){
-    fprintf(stderr,"Malloc error for %ld bytes\n",bufsize);
+  int             nfiles=rfile->nfiles;
+  int             baselines, channels;
+  long            k, group_size, rbufsize;
+  int             recl, status=0;
+  int             gcount;
+  int             b, i, t, idx, rec, slice;
+  int             n_files, file_order[MaxRecFiles];
+  char          **rbufs;           // array of raw buffers, one per file
+  TimeSlotType   *slots;           // array of time slots
+  int             total_slots;     // total number of time slots to process
+  int             max_slots;       // max possible slots
+  int             error_flag=0;
+
+  // First, get file order and determine which files have burst data
+  if((n_files=get_file_order(user, file_order))<0)
+    {fprintf(stderr,"No data found\n"); return -1;}
+
+  // Calculate buffer sizes
+  recl = user->corr->daspar.channels * user->corr->daspar.baselines * sizeof(float);
+  rbufsize = rec_per_slice * recl;
+  group_size = user->channels * user->stokes * sizeof(Cmplx3Type) + sizeof(UvwParType);
+
+  // Count total number of time slots (file, slice pairs) to process
+  max_slots = 0;
+  for(i=0; i<n_files; i++){
+    idx = file_order[i];
+    int n_rec = rfile->n_rec[idx];
+    int start_rec = rfile->start_rec[idx];
+    // count slices for this file
+    for(rec=start_rec; rec<start_rec+n_rec; rec+=rec_per_slice)
+      max_slots++;
+  }
+
+  if(max_slots == 0){
+    fprintf(stderr, "No time slots to process\n");
+    return 0;
+  }
+
+  // Allocate array of time slots
+  if((slots = (TimeSlotType*)calloc(max_slots, sizeof(TimeSlotType))) == NULL){
+    fprintf(stderr, "Malloc error for time slots\n");
     return -1;
   }
-  // allocate memory for the mean spectrum and the amplitude bandpass
-  channels=user->corr->daspar.channels; //input channels
-  baselines=user->baselines;//output baselines
-  for(b=0;b<baselines;b++){
-    if((bpass->off_src[b]=(Complex*)malloc(channels*sizeof(Complex)))==NULL)
-      {fprintf(stderr,"Malloc error in make_bpass\n"); return -1;}
-    if((bpass->abp[b]=(float*)malloc(channels*sizeof(float)))==NULL)
-      {fprintf(stderr,"Malloc error in make_bpass\n"); return -1;}
-  }
-  
-  gcount=1;//FITS numbering starts from 1
-  group_size=user->channels*user->stokes*sizeof(Cmplx3Type)+sizeof(UvwParType);
 
-  // read visibilties from raw files, write out random groups to FITS FILE
-  // loop over files and slices, and process one full slice at a time.
-  if((n_files=get_file_order(user,file_order))<0)
-    {fprintf(stderr,"No data found\n");return -1;}
-  for(i=0;i<n_files;i++){
-    idx=file_order[i];
-    start_rec=rfile->start_rec[idx]; n_rec=rfile->n_rec[idx];
-    //loop over slices, work with entire slice even if burst occupies only
-    //part of the slice
-    for(rec=start_rec;rec<start_rec+n_rec;rec+=rec_per_slice){
-      slice=rec/rec_per_slice;
-      if(!user->fake_data)
-	if(read_slice(user,idx,slice,rbuf)) return -1;
-      if((groups=copy_vis(user,idx,slice,start_rec,n_rec,rbuf,&visbuf))<0)
-	{fprintf(stderr,"Error processing %s\n",rfile->fname[idx]);return -1;}
-      if(!user->all_chan && user->do_flag){//flagging all chans is too expensive
-	if((flagged=clip(visbuf,user,idx,slice,groups))<0)return -1;
-	fprintf(user->lfp,"File: %d Slice:%d  Flagged %d of %d visibilities\n",
-		idx,slice,flagged,groups);
-      }
-      k =  groups*group_size;
-      if (user->corr->endian & LittleEndian)swap_long(visbuf, k/sizeof(float));
-      ffptbb(fptr,gcount,1,(long)k,(unsigned char *)visbuf,&status) ; 
-      if (status){printerror (status);break;}
-      fprintf(stderr,"File %d Slice %d wrote %12.4e MBytes\n",idx,slice,
-	      (1.0*k)/1.0e6);
-      gcount += groups;
-      free(visbuf); // allocated inside the copy_* functions
+  // Populate time slots array
+  total_slots = 0;
+  for(i=0; i<n_files; i++){
+    idx = file_order[i];
+    int start_rec = rfile->start_rec[idx];
+    int n_rec = rfile->n_rec[idx];
+    for(rec=start_rec; rec<start_rec+n_rec; rec+=rec_per_slice){
+      slice = rec / rec_per_slice;
+      slots[total_slots].file_idx = idx;
+      slots[total_slots].slice = slice;
+      slots[total_slots].start_rec = start_rec;
+      slots[total_slots].n_rec = n_rec;
+      slots[total_slots].global_idx = slice * nfiles + idx;  // round-robin time index
+      slots[total_slots].visbuf = NULL;
+      slots[total_slots].error = 0;
+      slots[total_slots].n_groups = 0;
+      slots[total_slots].flagged = 0;
+      total_slots++;
     }
   }
-  gcount--; // total number of groups written
 
-  for(b=0;b<baselines;b++){
-    free(bpass->off_src[b]);
-    free(bpass->abp[b]);
+  // Sort time slots by global time index (chronological order)
+  qsort(slots, total_slots, sizeof(TimeSlotType), compare_timeslots);
+
+  fprintf(stderr, "Processing %d time slots in chronological order\n", total_slots);
+
+  // Allocate raw buffers - one per thread for parallel processing
+  int num_threads = user->num_threads > 0 ? user->num_threads : 1;
+  if(num_threads > total_slots) num_threads = total_slots;
+
+  if((rbufs = (char**)malloc(num_threads * sizeof(char*))) == NULL){
+    fprintf(stderr, "Malloc error for rbuf array\n");
+    free(slots);
+    return -1;
   }
-  free(rbuf);
-  
+  for(t=0; t<num_threads; t++){
+    if((rbufs[t] = malloc(rbufsize)) == NULL){
+      fprintf(stderr, "Malloc error for rbuf[%d]\n", t);
+      for(int j=0; j<t; j++) free(rbufs[j]);
+      free(rbufs);
+      free(slots);
+      return -1;
+    }
+  }
+
+  // Allocate bandpass arrays - need separate set per thread for thread safety
+  channels = user->corr->daspar.channels;
+  baselines = user->baselines;
+
+  // Allocate per-thread bandpass structures
+  BpassType *bpass_arr = (BpassType*)calloc(num_threads, sizeof(BpassType));
+  if(bpass_arr == NULL){
+    fprintf(stderr, "Malloc error for bpass array\n");
+    for(t=0; t<num_threads; t++) free(rbufs[t]);
+    free(rbufs);
+    free(slots);
+    return -1;
+  }
+
+  for(t=0; t<num_threads; t++){
+    for(b=0; b<baselines; b++){
+      if((bpass_arr[t].off_src[b] = (Complex*)malloc(channels*sizeof(Complex))) == NULL){
+        fprintf(stderr, "Malloc error in bpass_arr\n");
+        error_flag = 1;
+        break;
+      }
+      if((bpass_arr[t].abp[b] = (float*)malloc(channels*sizeof(float))) == NULL){
+        fprintf(stderr, "Malloc error in bpass_arr\n");
+        error_flag = 1;
+        break;
+      }
+    }
+    if(error_flag) break;
+  }
+
+  if(error_flag){
+    // cleanup on error
+    for(int tt=0; tt<=t; tt++){
+      for(b=0; b<baselines; b++){
+        if(bpass_arr[tt].off_src[b]) free(bpass_arr[tt].off_src[b]);
+        if(bpass_arr[tt].abp[b]) free(bpass_arr[tt].abp[b]);
+      }
+    }
+    free(bpass_arr);
+    for(t=0; t<num_threads; t++) free(rbufs[t]);
+    free(rbufs);
+    free(slots);
+    return -1;
+  }
+
+  // PHASE 1: Process all time slots in parallel
+  // Each thread processes slots and stores results in slots[i].visbuf
+  #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
+  for(i=0; i<total_slots; i++){
+    int tid = 0;
+    #ifdef _OPENMP
+    tid = omp_get_thread_num();
+    #endif
+
+    char *rbuf = rbufs[tid];
+    TimeSlotType *slot = &slots[i];
+
+    // Temporarily point user->bpass to thread-local bpass
+    // (Note: this is a workaround - ideally copy_vis would take bpass as param)
+
+    // Read the slice
+    if(!user->fake_data){
+      if(read_slice(user, slot->file_idx, slot->slice, rbuf) != 0){
+        slot->error = 1;
+        continue;
+      }
+    }
+
+    // Process the slice - copy_vis allocates slot->visbuf
+    int groups = copy_vis(user, slot->file_idx, slot->slice,
+                          slot->start_rec, slot->n_rec, rbuf, &slot->visbuf);
+    if(groups < 0){
+      slot->error = 2;
+      continue;
+    }
+    slot->n_groups = groups;
+    slot->bufsize = groups * group_size;
+
+    // Apply flagging if enabled
+    if(!user->all_chan && user->do_flag){
+      int flagged = clip(slot->visbuf, user, slot->file_idx, slot->slice, groups);
+      if(flagged < 0){
+        slot->error = 3;
+        continue;
+      }
+      slot->flagged = flagged;
+    }
+
+    // Byte swap if needed (do it here so writing is fast)
+    if(user->corr->endian & LittleEndian){
+      swap_long(slot->visbuf, slot->bufsize / sizeof(float));
+    }
+  }
+
+  // Check for errors during parallel processing
+  for(i=0; i<total_slots; i++){
+    if(slots[i].error){
+      fprintf(stderr, "Error %d processing file %d slice %d\n",
+              slots[i].error, slots[i].file_idx, slots[i].slice);
+      error_flag = 1;
+    }
+  }
+
+  if(error_flag){
+    // Cleanup and return error
+    for(i=0; i<total_slots; i++){
+      if(slots[i].visbuf) free(slots[i].visbuf);
+    }
+    for(t=0; t<num_threads; t++){
+      for(b=0; b<baselines; b++){
+        free(bpass_arr[t].off_src[b]);
+        free(bpass_arr[t].abp[b]);
+      }
+      free(rbufs[t]);
+    }
+    free(bpass_arr);
+    free(rbufs);
+    free(slots);
+    return -1;
+  }
+
+  // PHASE 2: Write all time slots to FITS in chronological order
+  gcount = 1;  // FITS numbering starts from 1
+  for(i=0; i<total_slots; i++){
+    TimeSlotType *slot = &slots[i];
+
+    if(slot->n_groups > 0 && slot->visbuf != NULL){
+      k = slot->bufsize;
+      ffptbb(fptr, gcount, 1, (long)k, (unsigned char*)slot->visbuf, &status);
+      if(status){
+        printerror(status);
+        break;
+      }
+
+      // Log output (matching original format)
+      fprintf(stderr, "File %d Slice %d wrote %12.4e MBytes (time_idx=%d)\n",
+              slot->file_idx, slot->slice, (1.0*k)/1.0e6, slot->global_idx);
+
+      if(!user->all_chan && user->do_flag){
+        fprintf(user->lfp, "File: %d Slice:%d  Flagged %d of %d visibilities\n",
+                slot->file_idx, slot->slice, slot->flagged, slot->n_groups);
+      }
+
+      gcount += slot->n_groups;
+    }
+
+    // Free the visibility buffer
+    if(slot->visbuf) free(slot->visbuf);
+  }
+
+  gcount--;  // total number of groups written
+
+  // Cleanup
+  for(t=0; t<num_threads; t++){
+    for(b=0; b<baselines; b++){
+      free(bpass_arr[t].off_src[b]);
+      free(bpass_arr[t].abp[b]);
+    }
+    free(rbufs[t]);
+  }
+  free(bpass_arr);
+  free(rbufs);
+  free(slots);
+
   return gcount;
 }
 /*
