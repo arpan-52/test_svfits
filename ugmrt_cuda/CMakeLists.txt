@@ -6,6 +6,10 @@ set(CMAKE_CUDA_STANDARD 11)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 99)
 
+# Options
+option(USE_NOVAS "Use NOVAS library for coordinate transforms" ON)
+set(NOVAS_PATH "$ENV{HOME}/chengalur" CACHE PATH "Path to NOVAS library")
+
 # Find CUDA
 find_package(CUDAToolkit REQUIRED)
 
@@ -15,8 +19,33 @@ if(PkgConfig_FOUND)
     pkg_check_modules(CFITSIO cfitsio)
 endif()
 if(NOT CFITSIO_FOUND)
-    find_library(CFITSIO_LIBRARIES NAMES cfitsio)
-    find_path(CFITSIO_INCLUDE_DIRS NAMES fitsio.h)
+    # Try hardcoded path first (like original Makefile)
+    if(EXISTS "${NOVAS_PATH}/libcfitsio.a")
+        set(CFITSIO_LIBRARIES "${NOVAS_PATH}/libcfitsio.a")
+        set(CFITSIO_INCLUDE_DIRS "${NOVAS_PATH}")
+    else()
+        find_library(CFITSIO_LIBRARIES NAMES cfitsio)
+        find_path(CFITSIO_INCLUDE_DIRS NAMES fitsio.h)
+    endif()
+endif()
+
+# NOVAS library
+if(USE_NOVAS)
+    if(EXISTS "${NOVAS_PATH}/libnovasc.a")
+        set(NOVAS_LIBRARY "${NOVAS_PATH}/libnovasc.a")
+        set(NOVAS_INCLUDE_DIR "${NOVAS_PATH}")
+        message(STATUS "Found NOVAS: ${NOVAS_LIBRARY}")
+    else()
+        find_library(NOVAS_LIBRARY NAMES novasc novas)
+        find_path(NOVAS_INCLUDE_DIR NAMES novas.h)
+    endif()
+
+    if(NOVAS_LIBRARY)
+        add_compile_definitions(USE_NOVAS)
+    else()
+        message(WARNING "NOVAS not found at ${NOVAS_PATH}, disabling USE_NOVAS")
+        set(USE_NOVAS OFF)
+    endif()
 endif()
 
 # OpenMP (optional)
@@ -34,8 +63,17 @@ set(SVFITS_SOURCES
     svfits/svsubs.c
     svfits/utils.c
     svfits/stats.c
-    svfits/sla_prenut.c
 )
+
+# Add appropriate prenut source based on USE_NOVAS
+if(USE_NOVAS)
+    # Check if novas_prenut.c exists, otherwise use sla_prenut.c
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/svfits/novas_prenut.c")
+        list(APPEND SVFITS_SOURCES svfits/novas_prenut.c)
+    endif()
+else()
+    list(APPEND SVFITS_SOURCES svfits/sla_prenut.c)
+endif()
 
 add_library(svfits_core STATIC ${SVFITS_SOURCES})
 target_include_directories(svfits_core PUBLIC
@@ -43,7 +81,16 @@ target_include_directories(svfits_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CFITSIO_INCLUDE_DIRS}
 )
+
+if(USE_NOVAS AND NOVAS_INCLUDE_DIR)
+    target_include_directories(svfits_core PUBLIC ${NOVAS_INCLUDE_DIR})
+endif()
+
 target_link_libraries(svfits_core PUBLIC ${CFITSIO_LIBRARIES} m)
+
+if(USE_NOVAS AND NOVAS_LIBRARY)
+    target_link_libraries(svfits_core PUBLIC ${NOVAS_LIBRARY})
+endif()
 
 if(OpenMP_C_FOUND)
     target_link_libraries(svfits_core PUBLIC OpenMP::OpenMP_C)
@@ -144,6 +191,11 @@ message(STATUS "uGMRT CUDA Imager Configuration")
 message(STATUS "========================================")
 message(STATUS "  CUDA: ${CUDAToolkit_VERSION}")
 message(STATUS "  CFITSIO: ${CFITSIO_LIBRARIES}")
+message(STATUS "  NOVAS: ${USE_NOVAS}")
+if(USE_NOVAS)
+message(STATUS "  NOVAS_PATH: ${NOVAS_PATH}")
+message(STATUS "  NOVAS_LIB: ${NOVAS_LIBRARY}")
+endif()
 message(STATUS "  OpenMP: ${OpenMP_C_FOUND}")
 message(STATUS "========================================")
 message(STATUS "")
