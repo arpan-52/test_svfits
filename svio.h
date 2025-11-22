@@ -229,7 +229,7 @@ typedef struct
 
 typedef unsigned short ushort;
 
-int     copy_vis(SvSelectionType *user, int idx, int slice,
+int     copy_vis(SvSelectionType *user, BpassType *bpass, int idx, int slice,
 		 int start_rec, int n_rec,char *rbuf,char **outbuf);
 int     avg_vis(SvSelectionType *user, int idx, int slice, char *rbuf,
 		char *outbuf);

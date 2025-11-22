@@ -70,6 +70,9 @@
 #include <string.h>
 #include <endian.h>
 #include <unistd.h>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #include "fitsio.h"
 #include "fitsio.h"
@@ -631,6 +634,19 @@ void set_coordtype(SvSelectionType *user)
 
 }
 /*
+  Structure to hold processed data for one time slot
+*/
+typedef struct {
+  int    file_idx;
+  int    slice;
+  int    n_groups;
+  long   bufsize;
+  char  *visbuf;
+  int    flagged;
+  int    error;
+} SlotDataType;
+
+/*
   function to convert only the records in which there is a burst signal into
   random groups. If user->all_chan is set, then a multi-channel group is
   created and written to the FITS file (see make_allchan_group() for more
@@ -642,81 +658,255 @@ void set_coordtype(SvSelectionType *user)
   to the output FITS file, which is assumed to be initiated, with the write
   pointer at the location where the groups are to be written.
 
-  jnc may 2025
+  PARALLEL VERSION: Processes files in parallel using per-file bpass buffers.
+
+  jnc may 2025, parallelized nov 2025
 */
 int copy_burst(SvSelectionType *user,fitsfile *fptr){
-  BpassType      *bpass=&user->bpass;
   RecFileParType *rfile=&user->recfile;
   int             rec_per_slice=rfile->rec_per_slice;
   int             baselines,channels;
   long            k,group_size,bufsize;
   int             recl,status=0;
-  int             gcount,groups;
-  int             b,i,start_rec,n_rec,rec,idx,slice,flagged;
+  int             gcount;
+  int             b,i,j,f,start_rec,n_rec,rec,idx,slice;
   int             n_files,file_order[MaxRecFiles];
-  char           *visbuf,*rbuf;
-  
-  // allocate space for raw visibilities (one full timeslice is processed
-  // at a time). Space for the output random groups is allocated inside the
-  // copy_* functions
-  recl=user->corr->daspar.channels*user->corr->daspar.baselines*sizeof(float);
-  bufsize=rec_per_slice*recl;
-  if((rbuf=malloc(bufsize))==NULL){
-    fprintf(stderr,"Malloc error for %ld bytes\n",bufsize);
-    return -1;
-  }
-  // allocate memory for the mean spectrum and the amplitude bandpass
-  channels=user->corr->daspar.channels; //input channels
-  baselines=user->baselines;//output baselines
-  for(b=0;b<baselines;b++){
-    if((bpass->off_src[b]=(Complex*)malloc(channels*sizeof(Complex)))==NULL)
-      {fprintf(stderr,"Malloc error in make_bpass\n"); return -1;}
-    if((bpass->abp[b]=(float*)malloc(channels*sizeof(float)))==NULL)
-      {fprintf(stderr,"Malloc error in make_bpass\n"); return -1;}
-  }
-  
-  gcount=1;//FITS numbering starts from 1
-  group_size=user->channels*user->stokes*sizeof(Cmplx3Type)+sizeof(UvwParType);
+  char          **rbufs;         // one raw buffer per file
+  BpassType      *bpass_arr;     // one bpass per file
+  SlotDataType   *slots;         // results for each time slot
+  int             total_slots, slot_idx;
+  int             error_flag=0;
 
-  // read visibilties from raw files, write out random groups to FITS FILE
-  // loop over files and slices, and process one full slice at a time.
+  // Get file order and count total slots
   if((n_files=get_file_order(user,file_order))<0)
     {fprintf(stderr,"No data found\n");return -1;}
-  for(i=0;i<n_files;i++){
-    idx=file_order[i];
-    start_rec=rfile->start_rec[idx]; n_rec=rfile->n_rec[idx];
-    //loop over slices, work with entire slice even if burst occupies only
-    //part of the slice
-    for(rec=start_rec;rec<start_rec+n_rec;rec+=rec_per_slice){
-      slice=rec/rec_per_slice;
-      if(!user->fake_data)
-	if(read_slice(user,idx,slice,rbuf)) return -1;
-      if((groups=copy_vis(user,idx,slice,start_rec,n_rec,rbuf,&visbuf))<0)
-	{fprintf(stderr,"Error processing %s\n",rfile->fname[idx]);return -1;}
-      if(!user->all_chan && user->do_flag){//flagging all chans is too expensive
-	if((flagged=clip(visbuf,user,idx,slice,groups))<0)return -1;
-	fprintf(user->lfp,"File: %d Slice:%d  Flagged %d of %d visibilities\n",
-		idx,slice,flagged,groups);
-      }
-      k =  groups*group_size;
-      if (user->corr->endian & LittleEndian)swap_long(visbuf, k/sizeof(float));
-      ffptbb(fptr,gcount,1,(long)k,(unsigned char *)visbuf,&status) ; 
-      if (status){printerror (status);break;}
-      fprintf(stderr,"File %d Slice %d wrote %12.4e MBytes\n",idx,slice,
-	      (1.0*k)/1.0e6);
-      gcount += groups;
-      free(visbuf); // allocated inside the copy_* functions
+
+  // Count total time slots
+  total_slots = 0;
+  for(i=0; i<n_files; i++){
+    idx = file_order[i];
+    start_rec = rfile->start_rec[idx];
+    n_rec = rfile->n_rec[idx];
+    for(rec=start_rec; rec<start_rec+n_rec; rec+=rec_per_slice)
+      total_slots++;
+  }
+
+  if(total_slots == 0){
+    fprintf(stderr, "No time slots to process\n");
+    return 0;
+  }
+
+  fprintf(stderr, "Processing %d time slots across %d files in parallel\n",
+          total_slots, n_files);
+
+  // Calculate buffer sizes
+  recl = user->corr->daspar.channels * user->corr->daspar.baselines * sizeof(float);
+  bufsize = rec_per_slice * recl;
+  group_size = user->channels * user->stokes * sizeof(Cmplx3Type) + sizeof(UvwParType);
+  channels = user->corr->daspar.channels;
+  baselines = user->baselines;
+
+  // Allocate slots array for results
+  slots = (SlotDataType*)calloc(total_slots, sizeof(SlotDataType));
+  if(slots == NULL){
+    fprintf(stderr, "Malloc error for slots\n");
+    return -1;
+  }
+
+  // Allocate one raw buffer per file
+  rbufs = (char**)malloc(n_files * sizeof(char*));
+  if(rbufs == NULL){
+    fprintf(stderr, "Malloc error for rbufs\n");
+    free(slots);
+    return -1;
+  }
+  for(f=0; f<n_files; f++){
+    rbufs[f] = malloc(bufsize);
+    if(rbufs[f] == NULL){
+      fprintf(stderr, "Malloc error for rbuf[%d]\n", f);
+      for(j=0; j<f; j++) free(rbufs[j]);
+      free(rbufs);
+      free(slots);
+      return -1;
     }
   }
-  gcount--; // total number of groups written
 
-  for(b=0;b<baselines;b++){
-    free(bpass->off_src[b]);
-    free(bpass->abp[b]);
+  // Allocate one bpass per file
+  bpass_arr = (BpassType*)calloc(n_files, sizeof(BpassType));
+  if(bpass_arr == NULL){
+    fprintf(stderr, "Malloc error for bpass_arr\n");
+    for(f=0; f<n_files; f++) free(rbufs[f]);
+    free(rbufs);
+    free(slots);
+    return -1;
   }
-  free(rbuf);
-  
-  return gcount;
+  for(f=0; f<n_files; f++){
+    for(b=0; b<baselines; b++){
+      bpass_arr[f].off_src[b] = (Complex*)malloc(channels*sizeof(Complex));
+      bpass_arr[f].abp[b] = (float*)malloc(channels*sizeof(float));
+      if(bpass_arr[f].off_src[b] == NULL || bpass_arr[f].abp[b] == NULL){
+        fprintf(stderr, "Malloc error for bpass_arr[%d]\n", f);
+        error_flag = 1;
+        break;
+      }
+    }
+    if(error_flag) break;
+  }
+
+  if(error_flag){
+    // Cleanup on allocation error
+    for(j=0; j<=f; j++){
+      for(b=0; b<baselines; b++){
+        if(bpass_arr[j].off_src[b]) free(bpass_arr[j].off_src[b]);
+        if(bpass_arr[j].abp[b]) free(bpass_arr[j].abp[b]);
+      }
+    }
+    free(bpass_arr);
+    for(f=0; f<n_files; f++) free(rbufs[f]);
+    free(rbufs);
+    free(slots);
+    return -1;
+  }
+
+  // Populate slots array with file/slice info
+  slot_idx = 0;
+  for(i=0; i<n_files; i++){
+    idx = file_order[i];
+    start_rec = rfile->start_rec[idx];
+    n_rec = rfile->n_rec[idx];
+    for(rec=start_rec; rec<start_rec+n_rec; rec+=rec_per_slice){
+      slots[slot_idx].file_idx = idx;
+      slots[slot_idx].slice = rec / rec_per_slice;
+      slots[slot_idx].visbuf = NULL;
+      slots[slot_idx].n_groups = 0;
+      slots[slot_idx].error = 0;
+      slot_idx++;
+    }
+  }
+
+  // PARALLEL PROCESSING: Process files in parallel
+  #pragma omp parallel for num_threads(n_files) schedule(static,1)
+  for(i=0; i<n_files; i++){
+    int f_idx, my_start_rec, my_n_rec, my_rec, my_slice;
+    int groups, flagged_cnt, my_slot;
+    char *rbuf, *visbuf;
+    BpassType *bpass;
+
+    f_idx = file_order[i];
+    rbuf = rbufs[i];
+    bpass = &bpass_arr[i];
+    my_start_rec = rfile->start_rec[f_idx];
+    my_n_rec = rfile->n_rec[f_idx];
+
+    // Find my first slot index
+    my_slot = 0;
+    {
+      int j, jdx, jstart, jn_rec, jrec;
+      for(j=0; j<i; j++){
+        jdx = file_order[j];
+        jstart = rfile->start_rec[jdx];
+        jn_rec = rfile->n_rec[jdx];
+        for(jrec=jstart; jrec<jstart+jn_rec; jrec+=rec_per_slice)
+          my_slot++;
+      }
+    }
+
+    // Process all slices for this file
+    for(my_rec=my_start_rec; my_rec<my_start_rec+my_n_rec; my_rec+=rec_per_slice){
+      my_slice = my_rec / rec_per_slice;
+
+      // Read the slice
+      if(!user->fake_data){
+        if(read_slice(user, f_idx, my_slice, rbuf) != 0){
+          slots[my_slot].error = 1;
+          my_slot++;
+          continue;
+        }
+      }
+
+      // Process the slice
+      groups = copy_vis(user, bpass, f_idx, my_slice, my_start_rec, my_n_rec,
+                        rbuf, &visbuf);
+      if(groups < 0){
+        slots[my_slot].error = 2;
+        my_slot++;
+        continue;
+      }
+
+      slots[my_slot].n_groups = groups;
+      slots[my_slot].bufsize = groups * group_size;
+      slots[my_slot].visbuf = visbuf;
+
+      // Apply flagging if enabled
+      if(!user->all_chan && user->do_flag){
+        flagged_cnt = clip(visbuf, user, f_idx, my_slice, groups);
+        if(flagged_cnt < 0){
+          slots[my_slot].error = 3;
+          my_slot++;
+          continue;
+        }
+        slots[my_slot].flagged = flagged_cnt;
+      }
+
+      // Byte swap if needed
+      if(user->corr->endian & LittleEndian){
+        swap_long(visbuf, slots[my_slot].bufsize / sizeof(float));
+      }
+
+      my_slot++;
+    }
+  }
+
+  // Check for errors
+  for(i=0; i<total_slots; i++){
+    if(slots[i].error){
+      fprintf(stderr, "Error %d processing file %d slice %d\n",
+              slots[i].error, slots[i].file_idx, slots[i].slice);
+      error_flag = 1;
+    }
+  }
+
+  // SEQUENTIAL WRITE: Write all results to FITS file
+  gcount = 1;
+  if(!error_flag){
+    for(i=0; i<total_slots; i++){
+      if(slots[i].n_groups > 0 && slots[i].visbuf != NULL){
+        k = slots[i].bufsize;
+        ffptbb(fptr, gcount, 1, (long)k, (unsigned char*)slots[i].visbuf, &status);
+        if(status){
+          printerror(status);
+          break;
+        }
+        fprintf(stderr, "File %d Slice %d wrote %12.4e MBytes\n",
+                slots[i].file_idx, slots[i].slice, (1.0*k)/1.0e6);
+
+        if(!user->all_chan && user->do_flag){
+          fprintf(user->lfp, "File: %d Slice:%d  Flagged %d of %d visibilities\n",
+                  slots[i].file_idx, slots[i].slice, slots[i].flagged,
+                  slots[i].n_groups);
+        }
+        gcount += slots[i].n_groups;
+      }
+    }
+  }
+  gcount--;
+
+  // Cleanup
+  for(i=0; i<total_slots; i++){
+    if(slots[i].visbuf) free(slots[i].visbuf);
+  }
+  for(f=0; f<n_files; f++){
+    for(b=0; b<baselines; b++){
+      free(bpass_arr[f].off_src[b]);
+      free(bpass_arr[f].abp[b]);
+    }
+    free(rbufs[f]);
+  }
+  free(bpass_arr);
+  free(rbufs);
+  free(slots);
+
+  return error_flag ? -1 : gcount;
 }
 /*
   function to average random groups arising from visibilities made from
