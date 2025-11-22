@@ -1424,13 +1424,12 @@ int clip(char *visbuf, SvSelectionType *user, int idx, int slice, int groups){
   jnc 18apr25
 */
   
-int make_bpass(SvSelectionType *user, char *rbuf, int idx, int slice){
+int make_bpass(SvSelectionType *user, BpassType *bpass, char *rbuf, int idx, int slice){
   RecFileParType  *rfile=&user->recfile;
   int              rec_per_slice=rfile->rec_per_slice;
   CorrType        *corr=user->corr;
   VisParType      *vispar=&user->vispar;
   VisInfoType     *visinfo=vispar->visinfo;
-  BpassType       *bpass=&user->bpass;
   BurstParType    *burst=&user->burst;
   ScanInfoType    *scan=user->srec->scan;
   int              channels=corr->daspar.channels;//input channels
@@ -1597,12 +1596,11 @@ int read_slice(SvSelectionType *user,int idx, int slice, char *rbuf){
 
   jnc apr 2025
  */
-int make_onechan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
+int make_onechan_group(SvSelectionType *user, BpassType *bpass, int idx, int slice, char *rbuf,
 		       int r, double tm, BaseUvwType *uvw,char *obuf,
 		       int n_group, unsigned long group_size,int copied0){
   CorrType        *corr=user->corr;
   VisParType      *vispar=&user->vispar;
-  BpassType       *bpass=&user->bpass;
   ScanInfoType    *scan=user->srec->scan;
   SourceParType   *source=&scan->source;
   double           freq0=source->freq[0];
@@ -1714,12 +1712,11 @@ int make_onechan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
 
   jnc apr 2025
 */
-int make_postcorr_beam(SvSelectionType *user, char *rbuf,int r, double tm,
+int make_postcorr_beam(SvSelectionType *user, BpassType *bpass, char *rbuf,int r, double tm,
 		       BaseUvwType *uvw){
   CorrType        *corr=user->corr;
   VisParType      *vispar=&user->vispar;
   VisInfoType     *vinfo=vispar->visinfo;
-  BpassType       *bpass=&user->bpass;
   ScanInfoType    *scan=user->srec->scan;
   SourceParType   *source=&scan->source;
   double           freq0=source->freq[0],freq;
@@ -1823,13 +1820,12 @@ int make_postcorr_beam(SvSelectionType *user, char *rbuf,int r, double tm,
   stokes were contiguous, which is not as per the FITS format.
   jnc 14june25
  */
-int make_allchan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
+int make_allchan_group(SvSelectionType *user, BpassType *bpass, int idx, int slice, char *rbuf,
 		       int r, double tm, BaseUvwType *uvw,char *obuf,
 		       int n_group, unsigned long group_size,unsigned
 		       long copied0){
   CorrType        *corr=user->corr;
   VisParType      *vispar=&user->vispar;
-  BpassType       *bpass=&user->bpass;
   ScanInfoType    *scan=user->srec->scan;
   SourceParType   *source=&scan->source;
   RecFileParType  *rfile=&user->recfile;
@@ -1852,7 +1848,7 @@ int make_allchan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
   float           *abp;
   SvSelectionType user1;
   if(user->postcorr)
-    if(make_postcorr_beam(user,rbuf,r,tm,uvw)) return -1;
+    if(make_postcorr_beam(user,bpass,rbuf,r,tm,uvw)) return -1;
 
   if(!user->all_chan) return 0;//user only wanted a post-correlation beam
   
@@ -1959,7 +1955,7 @@ int make_allchan_group(SvSelectionType *user, int idx, int slice, char *rbuf,
 
   jnc apr 2025
 */
-int copy_vis(SvSelectionType *user, int idx, int slice,
+int copy_vis(SvSelectionType *user, BpassType *bpass, int idx, int slice,
 	       int start_rec, int n_rec, char *rbuf,char **outbuf){
   UvwParType      *uvwpar;
   RecFileParType  *rfile=&user->recfile;
@@ -2006,7 +2002,7 @@ int copy_vis(SvSelectionType *user, int idx, int slice,
   // the number of visibilities (2*groups)to copy. Nominal values
   // (off_src=0, bandpass=1) are returned in case the user does not want
   // to do bandpass calibration.
-  n_group=make_bpass(user,rbuf,idx,slice);
+  n_group=make_bpass(user,bpass,rbuf,idx,slice);
   if(!user->all_chan){
     if(n_group==0){
       fprintf(lfp,"No visibilities copied from %s slice %d\n",
@@ -2036,10 +2032,10 @@ int copy_vis(SvSelectionType *user, int idx, int slice,
   recl=corr->daspar.baselines*corr->daspar.channels*sizeof(float);
   for(copied=0,r=rec0;r<rec_per_slice;r++){
     if(user->all_chan||user->postcorr)
-      c=make_allchan_group(user,idx,slice,rbuf,r,tm,uvw,obuf,n_group,
+      c=make_allchan_group(user,bpass,idx,slice,rbuf,r,tm,uvw,obuf,n_group,
 			 group_size,copied);
     if(!user->all_chan)
-      c=make_onechan_group(user,idx,slice,rbuf,r,tm,uvw,obuf,n_group,
+      c=make_onechan_group(user,bpass,idx,slice,rbuf,r,tm,uvw,obuf,n_group,
 			 group_size,copied);
     if(c<0){
       fprintf(stderr,"Error copying visibilities from %s Slice %d\n",
