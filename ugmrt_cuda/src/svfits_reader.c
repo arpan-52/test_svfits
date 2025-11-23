@@ -233,6 +233,7 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
 
     size_t count = 0;
     size_t flagged = 0;
+    double u_min = 1e30, u_max = -1e30, v_min = 1e30, v_max = -1e30;
     int channels = r->user.corr->daspar.channels;
     int baselines = r->user.baselines;
     int nfiles = r->user.recfile.nfiles;
@@ -369,6 +370,18 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                         vis.channel = ch;
                         vis.freq = (float)freq_ch;  // Channel frequency (Hz) - for metadata only
 
+                        // Track UV stats
+                        if (u < u_min) u_min = u;
+                        if (u > u_max) u_max = u;
+                        if (v < v_min) v_min = v;
+                        if (v > v_max) v_max = v;
+
+                        // Debug: print first few UV values
+                        if (count < 5) {
+                            printf("  [vis %zu] bl=%d ch=%d u=%.1f v=%.1f w=%.1f re=%.3f im=%.3f\n",
+                                   count, bl, ch, u, v, w, re, im);
+                        }
+
                         // Callback to gridder
                         if (callback(&vis, user_data) != 0) {
                             return count;
@@ -382,6 +395,8 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
 
     printf("  Total: %zu visibilities\n", count);
     printf("  Flagged: %zu (%.1f%%)\n", flagged, 100.0 * flagged / (count + flagged));
+    printf("  UV range (wavelengths): u=[%.1f, %.1f] v=[%.1f, %.1f]\n",
+           u_min, u_max, v_min, v_max);
 
     return count;
 }
