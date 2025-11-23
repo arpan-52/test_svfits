@@ -53,6 +53,8 @@ extern void init_mat(SvSelectionType *user, double tm);
 extern float half_to_float(const unsigned short x);
 extern double get_ha(SvSelectionType *user, double tm);
 extern int robust_stats(int n, float *x, float *med, float *mad);
+extern int make_bpass(SvSelectionType *user, BpassType *bpass, char *rbuf, int idx, int slice);
+extern int get_chan_num(double trec, SvSelectionType *user, int *cs, int *ce);
 
 //-----------------------------------------------------------------------------
 // Helper functions
@@ -161,20 +163,33 @@ int reader_init(SvfitsReader reader) {
         return -1;
     }
 
-    // Allocate bandpass arrays for selected baselines
+    // Allocate bpass arrays for svfits (abp and off_src)
     int baselines = r->user.baselines;
+    BpassType* bpass = &r->user.bpass;
+    for (int bl = 0; bl < baselines; bl++) {
+        bpass->abp[bl] = calloc(channels, sizeof(float));
+        bpass->off_src[bl] = calloc(channels, sizeof(Complex));
+        if (!bpass->abp[bl] || !bpass->off_src[bl]) {
+            fprintf(stderr, "Failed to allocate bpass arrays\n");
+            return -1;
+        }
+        // Initialize to nominal values
+        for (int ch = 0; ch < channels; ch++) {
+            bpass->abp[bl][ch] = 1.0f;
+            bpass->off_src[bl][ch].r = 0.0f;
+            bpass->off_src[bl][ch].i = 0.0f;
+        }
+    }
+
+    // Also allocate our local arrays for convenience
     r->bandpass = malloc(baselines * sizeof(float*));
     r->off_source_re = malloc(baselines * sizeof(float*));
     r->off_source_im = malloc(baselines * sizeof(float*));
 
     for (int bl = 0; bl < baselines; bl++) {
-        r->bandpass[bl] = calloc(channels, sizeof(float));
+        r->bandpass[bl] = bpass->abp[bl];  // Point to same memory
         r->off_source_re[bl] = calloc(channels, sizeof(float));
         r->off_source_im[bl] = calloc(channels, sizeof(float));
-
-        for (int ch = 0; ch < channels; ch++) {
-            r->bandpass[bl][ch] = 1.0f;
-        }
     }
 
     r->initialized = 1;
@@ -216,11 +231,14 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
     }
 
     size_t count = 0;
+    size_t flagged = 0;
     int channels = r->user.corr->daspar.channels;
     int baselines = r->user.baselines;
     int nfiles = r->user.recfile.nfiles;
     int rec_per_slice = r->user.recfile.rec_per_slice;
     size_t recl = r->user.corr->daspar.baselines * channels * sizeof(float);
+    double integ = r->user.corr->daspar.lta * r->user.statime;
+    BpassType* bpass = &r->user.bpass;
 
     int file_order[MaxRecFiles];
     get_file_order(&r->user, file_order);
@@ -253,6 +271,14 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                 continue;
             }
 
+            // CRITICAL: Call make_bpass to compute burst channel ranges and corrections
+            // This fills bpass->start_chan[], end_chan[], abp[], off_src[]
+            int n_vis = make_bpass(&r->user, bpass, r->raw_buffer, file_idx, slice);
+            if (n_vis < 0) {
+                fprintf(stderr, "make_bpass failed for file %d slice %d\n", file_idx, slice);
+                continue;
+            }
+
             // Determine which records within this slice to process
             int slice_start_rec = slice * rec_per_slice;
             int slice_end_rec = slice_start_rec + rec_per_slice - 1;
@@ -267,24 +293,23 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
 
             // Process records within this slice
             for (int local_rec = local_start; local_rec <= local_end; local_rec++) {
-                int global_rec = slice_start_rec + local_rec;
                 char* rec_ptr = r->raw_buffer + local_rec * recl;
 
-                // Time for this record
+                // Time for this record (same formula as svfits)
                 double t_rec = r->user.recfile.t_start[file_idx] +
                     slice * r->user.recfile.slice_interval +
-                    local_rec * r->user.recfile.t_slice / rec_per_slice;
+                    (local_rec + 0.5) * integ;  // middle of integration
                 double mjd = r->user.recfile.mjd_ref + t_rec / 86400.0;
 
                 init_mat(&r->user, mjd);
 
-                // Get burst channel range for this record
-                int start_ch = r->user.bpass.start_chan[local_rec];
-                int end_ch = r->user.bpass.end_chan[local_rec];
+                // Get burst channel range for this record (now properly computed by make_bpass!)
+                int start_ch = bpass->start_chan[local_rec];
+                int end_ch = bpass->end_chan[local_rec];
 
                 if (start_ch < 0) start_ch = 0;
                 if (end_ch >= channels) end_ch = channels - 1;
-                if (end_ch < start_ch) continue;  // No valid channels
+                if (end_ch < start_ch) continue;  // No valid channels for this record
 
                 // Process each baseline
                 for (int bl = 0; bl < baselines; bl++) {
@@ -294,12 +319,30 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                     double u, v, w;
                     compute_uvw(r, bl, mjd, &u, &v, &w);
 
+                    float* abp = bpass->abp[bl];
+                    Complex* off_src = bpass->off_src[bl];
+
                     // Process channels with burst signal
                     for (int ch = start_ch; ch <= end_ch; ch++) {
                         float re = half_to_float(vis_ptr[ch * 2]);
                         float im = half_to_float(vis_ptr[ch * 2 + 1]);
 
-                        if (!isfinite(re) || !isfinite(im)) continue;
+                        if (!isfinite(re) || !isfinite(im)) {
+                            flagged++;
+                            continue;
+                        }
+
+                        // Apply baseline subtraction (subtract off-source mean)
+                        if (r->user.do_base) {
+                            re -= off_src[ch].r;
+                            im -= off_src[ch].i;
+                        }
+
+                        // Apply bandpass correction (divide by amplitude)
+                        if (r->user.do_band && abp[ch] > 0.0f) {
+                            re /= abp[ch];
+                            im /= abp[ch];
+                        }
 
                         // Flip imaginary if needed
                         if (r->user.vispar.visinfo[bl].flip) {
@@ -327,6 +370,9 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
         }
     }
 
+    printf("  Total: %zu visibilities\n", count);
+    printf("  Flagged: %zu (%.1f%%)\n", flagged, 100.0 * flagged / (count + flagged));
+
     return count;
 }
 
@@ -338,12 +384,16 @@ void reader_free(SvfitsReader reader) {
 
     if (r->initialized) {
         int baselines = r->user.baselines;
-        if (r->bandpass) {
-            for (int bl = 0; bl < baselines; bl++) {
-                free(r->bandpass[bl]);
-            }
-            free(r->bandpass);
+        BpassType* bpass = &r->user.bpass;
+
+        // Free bpass arrays (abp and off_src)
+        for (int bl = 0; bl < baselines; bl++) {
+            if (bpass->abp[bl]) free(bpass->abp[bl]);
+            if (bpass->off_src[bl]) free(bpass->off_src[bl]);
         }
+
+        // Free our convenience pointers (bandpass points to abp, don't double-free)
+        if (r->bandpass) free(r->bandpass);
         if (r->off_source_re) {
             for (int bl = 0; bl < baselines; bl++) {
                 free(r->off_source_re[bl]);
