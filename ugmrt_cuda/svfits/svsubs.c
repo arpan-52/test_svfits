@@ -633,11 +633,15 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile,
   strcpy(user->fitsfile,"TEST.FITS") ;
   /* default parameters, reset by reading input scanfile*/
   fprintf(stderr,"DEBUG init_user: user->hdr=%p\n", (void*)user->hdr); fflush(stderr);
+  fprintf(stderr,"DEBUG init_user: about to write user->hdr->scans\n"); fflush(stderr);
   user->hdr->scans=user->scans;
+  fprintf(stderr,"DEBUG init_user: hdr->scans done, opening log again\n"); fflush(stderr);
   if((user->lfp=fopen("svfits.log","w"))==NULL)
     {fprintf(stderr,"Unable to open svfits.log\n"); return -1;}
+  fprintf(stderr,"DEBUG init_user: calling init_corr with antfile=%s\n", antfile); fflush(stderr);
   // initialize the correlator settings
   init_corr(user,antfile); // hardcoded for now
+  fprintf(stderr,"DEBUG init_user: init_corr done\n"); fflush(stderr);
   user->channels=1; //only one output channel by default
   user->antmask=1073741823;//30 antennas (C07 and S05 dropped)
   srec->corr=user->corr;
