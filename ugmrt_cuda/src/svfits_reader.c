@@ -181,23 +181,36 @@ static void compute_uvw(struct SvfitsReaderImpl* r, int bl, double mjd,
 
 SvfitsReader reader_create(const ReaderConfig* config) {
     struct SvfitsReaderImpl* r = calloc(1, sizeof(struct SvfitsReaderImpl));
+    if (!r) { fprintf(stderr, "Failed to alloc SvfitsReaderImpl\n"); return NULL; }
     r->config = *config;
 
-    // Allocate svfits structures with malloc like original svfits.c does
+    // Allocate svfits structures with malloc EXACTLY like original svfits.c does
     // See svfits.c main() lines 1128-1135
     r->user.hdr = (InitHdrType*)malloc(sizeof(InitHdrType));
+    if (!r->user.hdr) { fprintf(stderr, "Failed to alloc hdr\n"); return NULL; }
     r->user.hdr->scans = 1;
-    r->user.srec = (ScanRecType*)malloc(sizeof(ScanRecType));
-    r->user.srec->scan = (ScanInfoType*)malloc(sizeof(ScanInfoType));
-    bzero(r->user.srec->scan, sizeof(ScanInfoType));
-    r->user.corr = (CorrType*)malloc(sizeof(CorrType));
-    r->user.srec->corr = r->user.corr;
 
+    r->user.srec = (ScanRecType*)malloc(sizeof(ScanRecType));
+    if (!r->user.srec) { fprintf(stderr, "Failed to alloc srec\n"); return NULL; }
+
+    r->user.srec->scan = (ScanInfoType*)malloc(sizeof(ScanInfoType));
+    if (!r->user.srec->scan) { fprintf(stderr, "Failed to alloc scan\n"); return NULL; }
+
+    // Original only bzero's source, not whole scan
+    bzero(&r->user.srec->scan->source, sizeof(SourceParType));
+
+    r->user.corr = (CorrType*)malloc(sizeof(CorrType));
+    if (!r->user.corr) { fprintf(stderr, "Failed to alloc corr\n"); return NULL; }
+
+    // Don't set srec->corr here - init_user does it
+
+    printf("reader_create: allocations done\n"); fflush(stdout);
     return r;
 }
 
 int reader_init(SvfitsReader reader) {
     struct SvfitsReaderImpl* r = reader;
+    printf("reader_init: starting\n"); fflush(stdout);
 
     char param_file[1024], antsamp[1024], bulletin[1024];
     strcpy(param_file, r->config.param_file);
@@ -208,6 +221,8 @@ int reader_init(SvfitsReader reader) {
         strcpy(bulletin, r->config.bulletin_a);
         bulletin_ptr = bulletin;
     }
+
+    printf("reader_init: calling init_user with param=%s ant=%s\n", param_file, antsamp); fflush(stdout);
 
     if (init_user(&r->user, param_file, antsamp, NULL, bulletin_ptr) != 0) {
         fprintf(stderr, "Failed to initialize svfits\n");
