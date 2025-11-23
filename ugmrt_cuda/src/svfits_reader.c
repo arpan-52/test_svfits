@@ -146,12 +146,16 @@ int reader_init(SvfitsReader reader) {
     r->burst_info.ra_rad = r->user.burst.ra_app;
     r->burst_info.dec_rad = r->user.burst.dec_app;
 
-    // Extract freq info
+    // Extract freq info - NOTE: ch_width is always positive, net_sign gives direction
     r->freq_info.freq_start_hz = r->user.srec->scan->source.freq[0];
     r->freq_info.channel_width_hz = r->user.srec->scan->source.ch_width;
     r->freq_info.n_channels = r->user.corr->daspar.channels;
+
+    // Signed channel width (net_sign determines if freq increases or decreases with channel)
+    int net_sign = r->user.srec->scan->source.net_sign[0];
+    double signed_ch_width = r->freq_info.channel_width_hz * net_sign;
     r->freq_info.freq_end_hz = r->freq_info.freq_start_hz +
-        r->freq_info.n_channels * r->freq_info.channel_width_hz;
+        r->freq_info.n_channels * signed_ch_width;
 
     // Allocate buffers - one slice worth
     int das_baselines = r->user.corr->daspar.baselines;
@@ -313,9 +317,10 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                 if (end_ch >= channels) end_ch = channels - 1;
                 if (end_ch < start_ch) continue;  // No valid channels for this record
 
-                // Frequency info for this observation
+                // Frequency info for this observation (signed channel width)
                 double freq0 = r->freq_info.freq_start_hz;
-                double ch_width = r->freq_info.channel_width_hz;
+                int net_sign = r->user.srec->scan->source.net_sign[0];
+                double ch_width = r->freq_info.channel_width_hz * net_sign;
 
                 // Process each baseline
                 for (int bl = 0; bl < baselines; bl++) {
@@ -359,8 +364,8 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                         double u, v, w;
                         compute_uvw(r, bl, mjd, &u, &v, &w, freq_ch);
 
-                        // Create visibility
-                        CudaVisibility vis;
+                        // Create visibility - initialize ALL fields
+                        CudaVisibility vis = {0};  // Zero-initialize all fields
                         vis.re = re;
                         vis.im = im;
                         vis.weight = 1.0f;
@@ -368,7 +373,13 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                         vis.v = (float)v;
                         vis.w = (float)w;
                         vis.channel = ch;
-                        vis.freq = (float)freq_ch;  // Channel frequency (Hz) - for metadata only
+                        vis.freq = (float)freq_ch;
+                        vis.d_phase = 0.0f;
+                        vis.cf_cube = 0;
+                        vis.cf_grp = 0;
+                        vis.grid_cube = 0;
+                        vis.phase_grad_u = 0.0f;
+                        vis.phase_grad_v = 0.0f;
 
                         // Track UV stats
                         if (u < u_min) u_min = u;
@@ -390,7 +401,7 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
 
                         // Grid Hermitian conjugate: V*(-u,-v,-w)
                         // For real-valued images, V(u,v) and V*(-u,-v) must both be gridded
-                        CudaVisibility vis_conj;
+                        CudaVisibility vis_conj = {0};  // Zero-initialize
                         vis_conj.re = re;           // Real part same
                         vis_conj.im = -im;          // Imaginary part negated (conjugate)
                         vis_conj.weight = 1.0f;
@@ -399,6 +410,12 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                         vis_conj.w = (float)(-w);   // Negate W
                         vis_conj.channel = ch;
                         vis_conj.freq = (float)freq_ch;
+                        vis_conj.d_phase = 0.0f;
+                        vis_conj.cf_cube = 0;
+                        vis_conj.cf_grp = 0;
+                        vis_conj.grid_cube = 0;
+                        vis_conj.phase_grad_u = 0.0f;
+                        vis_conj.phase_grad_v = 0.0f;
 
                         // Track conjugate UV stats
                         if (-u < u_min) u_min = -u;
