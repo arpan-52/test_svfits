@@ -300,6 +300,7 @@ double reader_get_wavelength(SvfitsReader reader) {
 
 size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* user_data) {
     struct SvfitsReaderImpl* r = reader;
+    fprintf(stderr, "DEBUG reader_process: enter\n"); fflush(stderr);
     if (!r->initialized) {
         fprintf(stderr, "Reader not initialized\n");
         return 0;
@@ -310,33 +311,42 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
     int baselines = r->user.baselines;
     int nfiles = r->user.recfile.nfiles;
     size_t recl = r->user.corr->daspar.baselines * channels * sizeof(float);
+    fprintf(stderr, "DEBUG: channels=%d baselines=%d nfiles=%d recl=%zu\n", channels, baselines, nfiles, recl); fflush(stderr);
 
     int file_order[MaxRecFiles];
+    fprintf(stderr, "DEBUG: calling get_file_order\n"); fflush(stderr);
     get_file_order(&r->user, file_order);
+    fprintf(stderr, "DEBUG: get_file_order done\n"); fflush(stderr);
 
     // Process each file
     for (int f = 0; f < nfiles; f++) {
         int file_idx = file_order[f];
+        fprintf(stderr, "DEBUG: file %d/%d, file_idx=%d, n_rec=%d\n", f, nfiles, file_idx, r->user.recfile.n_rec[file_idx]); fflush(stderr);
 
         if (r->user.recfile.n_rec[file_idx] <= 0) continue;
 
         // Read raw data
+        fprintf(stderr, "DEBUG: calling read_slice file_idx=%d\n", file_idx); fflush(stderr);
         if (read_slice(&r->user, file_idx, 0, r->raw_buffer) != 0) {
             fprintf(stderr, "Failed to read file %d\n", file_idx);
             continue;
         }
+        fprintf(stderr, "DEBUG: read_slice done\n"); fflush(stderr);
 
         // Compute bandpass and off-source
+        fprintf(stderr, "DEBUG: compute bandpass/off-source\n"); fflush(stderr);
         if (r->config.do_bandpass) {
             compute_bandpass(r, file_idx, r->raw_buffer);
         }
         if (r->config.do_baseline) {
             compute_off_source(r, file_idx, r->raw_buffer);
         }
+        fprintf(stderr, "DEBUG: bandpass/off-source done\n"); fflush(stderr);
 
         // Process records with burst
         int start_rec = r->user.recfile.start_rec[file_idx];
         int n_rec = r->user.recfile.n_rec[file_idx];
+        fprintf(stderr, "DEBUG: start_rec=%d n_rec=%d\n", start_rec, n_rec); fflush(stderr);
 
         for (int rec = start_rec; rec < start_rec + n_rec; rec++) {
             char* rec_ptr = r->raw_buffer + rec * recl;
@@ -349,6 +359,9 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
 
             int start_ch = r->user.bpass.start_chan[rec];
             int end_ch = r->user.bpass.end_chan[rec];
+            if (rec == start_rec) {
+                fprintf(stderr, "DEBUG: rec=%d start_ch=%d end_ch=%d\n", rec, start_ch, end_ch); fflush(stderr);
+            }
 
             // Process each baseline
             for (int bl = 0; bl < baselines; bl++) {
