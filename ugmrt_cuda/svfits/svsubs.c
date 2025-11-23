@@ -644,11 +644,13 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile,
   fprintf(stderr,"DEBUG init_user: init_corr done\n"); fflush(stderr);
   user->channels=1; //only one output channel by default
   user->antmask=1073741823;//30 antennas (C07 and S05 dropped)
+  fprintf(stderr,"DEBUG init_user: setting srec fields\n"); fflush(stderr);
   srec->corr=user->corr;
   srec->scannum=0;
   srec->scan_id=1;
   srec->source_id=1;
   srec->freq_id=1;
+  fprintf(stderr,"DEBUG init_user: scan=%p scan->proj=%p\n", (void*)scan, (void*)&scan->proj); fflush(stderr);
   strcpy(scan->proj.code,"TEST"); // replace with GTAC project code
   strcpy(scan->proj.observer,"DUMMY"); // replace with GTAC observer
   strcpy(scan->proj.title,"SPOTLIGHT"); // replace with GTAC observer
