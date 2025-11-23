@@ -199,11 +199,16 @@ int main(int argc, char* argv[]) {
     reader_get_burst_info(reader, &burst_info);
 
     // Compute grid scale
+    // UV in wavelengths maps to grid: grid = u * scale + N/2
+    // where scale = N * cell_rad (NOT inverted!)
     double cell_rad = cell_size_asec * M_PI / (180.0 * 3600.0);
-    float scale_u = 1.0f / (nx * cell_rad);
-    float scale_v = 1.0f / (ny * cell_rad);
+    float scale_u = nx * cell_rad;
+    float scale_v = ny * cell_rad;
 
-    printf("Grid scale: %.2f, %.2f wavelengths/pixel\n", scale_u, scale_v);
+    // Maximum UV extent (wavelengths) that fits on grid
+    double max_uv = 1.0 / (2.0 * cell_rad);
+    printf("Grid scale: u=%.6f, v=%.6f (max UV: %.1f wavelengths)\n",
+           scale_u, scale_v, max_uv);
 
     // Process visibilities
     printf("\nProcessing visibilities...\n");

@@ -367,7 +367,7 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                         vis.v = (float)v;
                         vis.w = (float)w;
                         vis.channel = ch;
-                        vis.freq = 299792458.0f;  // C_LIGHT: UV already in wavelengths, so inv_lambda=1
+                        vis.freq = (float)freq_ch;  // Channel frequency (Hz) - for metadata only
 
                         // Callback to gridder
                         if (callback(&vis, user_data) != 0) {

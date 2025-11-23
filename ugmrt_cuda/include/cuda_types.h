@@ -45,7 +45,7 @@ typedef struct {
     float re, im;           // Visibility value (real, imaginary)
     float weight;           // Weight (negative = flagged)
     float u, v, w;          // UVW coordinates in wavelengths
-    float freq;             // Frequency in Hz (for computing inv_lambda)
+    float freq;             // Frequency in Hz (for metadata, not used in gridding)
     float d_phase;          // Phase angle for phasor
     int channel;            // Frequency channel index
     int cf_cube;            // CF cube index (e.g., W-plane)

@@ -3,7 +3,7 @@
  * @brief CUDA kernels for visibility gridding
  *
  * This implementation matches HPG (Hyperion Polyphase Gridder) exactly:
- *   - UV coordinate computation: position = grid_scale * coord * inv_lambda + grid_size/2
+ *   - UV coordinate computation: position = grid_scale * coord + grid_size/2 (UV in wavelengths)
  *   - CF indexing: 6D [x_major, y_major, mueller, cube, x_minor, y_minor]
  *   - W-term conjugation: cf_im_factor = (pos_w ? -1 : 1) for gridding
  *   - Phase screen: cphase(phi_X + phi_Y) applied to CF
@@ -21,8 +21,7 @@
 #include "cuda_types.h"
 #include "cuda_gridder.h"
 
-// Speed of light
-#define C_LIGHT 299792458.0f
+// Note: UV coordinates are passed in wavelengths, no C_LIGHT conversion needed
 
 //=============================================================================
 // Device helper functions (matching HPG)
@@ -66,8 +65,7 @@ __device__ __forceinline__ cuFloatComplex cfma(cuFloatComplex a, cuFloatComplex 
  * @param cf_padding  CF padding (typically oversampling or 0)
  * @param cf_radius   CF half-width (support)
  * @param coord       UV coordinate in wavelengths
- * @param inv_lambda  1/wavelength = freq/c
- * @param grid_scale  Grid scale factor
+ * @param grid_scale  Grid scale factor (N * cell_rad)
  * @param grid_coord  Output: grid coordinate (leftmost of CF support)
  * @param cf_major    Output: CF major index
  * @param cf_minor    Output: CF minor (oversampling) index
@@ -78,16 +76,15 @@ __device__ void compute_vis_coord_hpg(
     int oversampling,
     int cf_padding,
     int cf_radius,
-    float coord,
-    float inv_lambda,
+    float coord,        // UV coordinate already in wavelengths
     float grid_scale,
     int* grid_coord,
     int* cf_major,
     int* cf_minor,
     int* fine_offset)
 {
-    // Position on grid (matching HPG exactly)
-    float position = grid_scale * coord * inv_lambda + g_size / 2.0f;
+    // Position on grid: coord (wavelengths) * scale + center
+    float position = grid_scale * coord + g_size / 2.0f;
 
     // Nearest grid point
     int g = __float2int_rn(position);  // round to nearest
@@ -153,24 +150,21 @@ __global__ void grid_visibility_hpg_kernel(
     // Skip flagged visibilities
     if (v.weight <= 0.0f) return;
 
-    // Compute inverse wavelength
-    float inv_lambda = v.freq / C_LIGHT;
-
     // CF size (full width)
     int cf_size = 2 * cf_support + 1;
 
-    // Compute grid and CF coordinates for U
+    // Compute grid and CF coordinates for U (UV already in wavelengths)
     int grid_u, cf_major_u, cf_minor_u, fine_offset_u;
     compute_vis_coord_hpg(
         nx, cf_oversampling, cf_padding, cf_support,
-        v.u, inv_lambda, scale_u,
+        v.u, scale_u,
         &grid_u, &cf_major_u, &cf_minor_u, &fine_offset_u);
 
     // Compute grid and CF coordinates for V
     int grid_v, cf_major_v, cf_minor_v, fine_offset_v;
     compute_vis_coord_hpg(
         ny, cf_oversampling, cf_padding, cf_support,
-        v.v, inv_lambda, scale_v,
+        v.v, scale_v,
         &grid_v, &cf_major_v, &cf_minor_v, &fine_offset_v);
 
     // Check if visibility is within grid bounds
@@ -290,12 +284,10 @@ __global__ void grid_visibility_kernel(
     // Skip flagged visibilities
     if (v.weight <= 0.0f) return;
 
-    // Compute inverse wavelength
-    float inv_lambda = v.freq / C_LIGHT;
-
-    // Convert UV to grid coordinates (HPG-style)
-    float grid_u = scale_u * v.u * inv_lambda + nx / 2.0f;
-    float grid_v = scale_v * v.v * inv_lambda + ny / 2.0f;
+    // UV coordinates are already in wavelengths - grid directly
+    // grid = scale * u + N/2, where scale = N * cell_rad
+    float grid_u = scale_u * v.u + nx / 2.0f;
+    float grid_v = scale_v * v.v + ny / 2.0f;
 
     // Integer grid position (nearest)
     int iu = __float2int_rn(grid_u);
