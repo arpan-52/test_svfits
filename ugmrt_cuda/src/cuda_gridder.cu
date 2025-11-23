@@ -365,6 +365,21 @@ __global__ void normalize_kernel(
 }
 
 /**
+ * @brief Scale grid by a constant factor (for FFT normalization)
+ */
+__global__ void scale_kernel(
+    cuFloatComplex* __restrict__ grid,
+    int n_pixels,
+    float scale)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= n_pixels) return;
+
+    grid[tid].x *= scale;
+    grid[tid].y *= scale;
+}
+
+/**
  * @brief FFT shift kernel (swap quadrants)
  */
 __global__ void fftshift_kernel(
@@ -624,17 +639,16 @@ void grid_fft(UVGrid* grid, int forward) {
 
     cufftDestroy(plan);
 
-    // Normalize if inverse FFT
+    // Normalize if inverse FFT (cuFFT doesn't include 1/N factor)
     if (!forward) {
         int n_pixels = grid->nx * grid->ny * grid->n_pol * grid->n_chan;
         float norm = 1.0f / (grid->nx * grid->ny);
 
-        // Simple normalization kernel
         int block_size = 256;
         int n_blocks = (n_pixels + block_size - 1) / block_size;
 
-        // Inline lambda not possible in CUDA, so we normalize on host or use a kernel
-        // For simplicity, do it in normalize step
+        scale_kernel<<<n_blocks, block_size>>>(grid->d_grid, n_pixels, norm);
+        CUDA_CHECK(cudaGetLastError());
     }
 
     CUDA_CHECK(cudaDeviceSynchronize());

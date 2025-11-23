@@ -382,8 +382,31 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                                    count, bl, ch, u, v, w, re, im);
                         }
 
-                        // Callback to gridder
+                        // Callback to gridder - grid the visibility
                         if (callback(&vis, user_data) != 0) {
+                            return count;
+                        }
+                        count++;
+
+                        // Grid Hermitian conjugate: V*(-u,-v,-w)
+                        // For real-valued images, V(u,v) and V*(-u,-v) must both be gridded
+                        CudaVisibility vis_conj;
+                        vis_conj.re = re;           // Real part same
+                        vis_conj.im = -im;          // Imaginary part negated (conjugate)
+                        vis_conj.weight = 1.0f;
+                        vis_conj.u = (float)(-u);   // Negate U
+                        vis_conj.v = (float)(-v);   // Negate V
+                        vis_conj.w = (float)(-w);   // Negate W
+                        vis_conj.channel = ch;
+                        vis_conj.freq = (float)freq_ch;
+
+                        // Track conjugate UV stats
+                        if (-u < u_min) u_min = -u;
+                        if (-u > u_max) u_max = -u;
+                        if (-v < v_min) v_min = -v;
+                        if (-v > v_max) v_max = -v;
+
+                        if (callback(&vis_conj, user_data) != 0) {
                             return count;
                         }
                         count++;
