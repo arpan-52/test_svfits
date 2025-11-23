@@ -632,6 +632,7 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile,
   user->bpass.slice=-1;
   strcpy(user->fitsfile,"TEST.FITS") ;
   /* default parameters, reset by reading input scanfile*/
+  fprintf(stderr,"DEBUG init_user: user->hdr=%p\n", (void*)user->hdr); fflush(stderr);
   user->hdr->scans=user->scans;
   if((user->lfp=fopen("svfits.log","w"))==NULL)
     {fprintf(stderr,"Unable to open svfits.log\n"); return -1;}
