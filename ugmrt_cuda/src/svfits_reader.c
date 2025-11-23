@@ -312,13 +312,14 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                 if (end_ch >= channels) end_ch = channels - 1;
                 if (end_ch < start_ch) continue;  // No valid channels for this record
 
+                // Frequency info for this observation
+                double freq0 = r->freq_info.freq_start_hz;
+                double ch_width = r->freq_info.channel_width_hz;
+
                 // Process each baseline
                 for (int bl = 0; bl < baselines; bl++) {
                     unsigned short* vis_ptr = (unsigned short*)(rec_ptr +
                         r->user.vispar.visinfo[bl].off);
-
-                    double u, v, w;
-                    compute_uvw(r, bl, mjd, &u, &v, &w);
 
                     float* abp = bpass->abp[bl];
                     Complex* off_src = bpass->off_src[bl];
@@ -350,6 +351,13 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                             im = -im;
                         }
 
+                        // Channel frequency for MFS
+                        double freq_ch = freq0 + ch * ch_width;
+
+                        // Compute UVW in wavelengths at this channel's frequency
+                        double u, v, w;
+                        compute_uvw(r, bl, mjd, &u, &v, &w, freq_ch);
+
                         // Create visibility
                         CudaVisibility vis;
                         vis.re = re;
@@ -359,6 +367,7 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                         vis.v = (float)v;
                         vis.w = (float)w;
                         vis.channel = ch;
+                        vis.freq = 299792458.0f;  // C_LIGHT: UV already in wavelengths, so inv_lambda=1
 
                         // Callback to gridder
                         if (callback(&vis, user_data) != 0) {
