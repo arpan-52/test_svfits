@@ -58,94 +58,6 @@ extern int robust_stats(int n, float *x, float *med, float *mad);
 // Helper functions
 //-----------------------------------------------------------------------------
 
-static void compute_bandpass(struct SvfitsReaderImpl* r, int file_idx, char* raw_buf) {
-    int channels = r->user.corr->daspar.channels;
-    int baselines = r->user.baselines;
-    size_t recl = r->user.corr->daspar.baselines * channels * sizeof(float);
-
-    short* start_chan = r->user.bpass.start_chan;
-    short* end_chan = r->user.bpass.end_chan;
-
-    for (int bl = 0; bl < baselines; bl++) {
-        float* sum = calloc(channels, sizeof(float));
-        int* count = calloc(channels, sizeof(int));
-
-        for (int rec = 0; rec < MAX_REC_PER_SLICE; rec++) {
-            char* rec_ptr = raw_buf + rec * recl;
-            unsigned short* vis_ptr = (unsigned short*)(rec_ptr +
-                r->user.vispar.visinfo[bl].off);
-
-            for (int ch = 0; ch < channels; ch++) {
-                if (ch >= start_chan[rec] && ch <= end_chan[rec]) continue;
-
-                float re = half_to_float(vis_ptr[ch * 2]);
-                float im = half_to_float(vis_ptr[ch * 2 + 1]);
-                float amp = sqrtf(re * re + im * im);
-
-                if (isfinite(amp) && amp > 0) {
-                    sum[ch] += amp;
-                    count[ch]++;
-                }
-            }
-        }
-
-        for (int ch = 0; ch < channels; ch++) {
-            r->bandpass[bl][ch] = (count[ch] > 0) ? sum[ch] / count[ch] : 1.0f;
-        }
-
-        free(sum);
-        free(count);
-    }
-}
-
-static void compute_off_source(struct SvfitsReaderImpl* r, int file_idx, char* raw_buf) {
-    int channels = r->user.corr->daspar.channels;
-    int baselines = r->user.baselines;
-    size_t recl = r->user.corr->daspar.baselines * channels * sizeof(float);
-
-    short* start_chan = r->user.bpass.start_chan;
-    short* end_chan = r->user.bpass.end_chan;
-
-    for (int bl = 0; bl < baselines; bl++) {
-        float* sum_re = calloc(channels, sizeof(float));
-        float* sum_im = calloc(channels, sizeof(float));
-        int* count = calloc(channels, sizeof(int));
-
-        for (int rec = 0; rec < MAX_REC_PER_SLICE; rec++) {
-            char* rec_ptr = raw_buf + rec * recl;
-            unsigned short* vis_ptr = (unsigned short*)(rec_ptr +
-                r->user.vispar.visinfo[bl].off);
-
-            for (int ch = 0; ch < channels; ch++) {
-                if (ch >= start_chan[rec] && ch <= end_chan[rec]) continue;
-
-                float re = half_to_float(vis_ptr[ch * 2]);
-                float im = half_to_float(vis_ptr[ch * 2 + 1]);
-
-                if (isfinite(re) && isfinite(im)) {
-                    sum_re[ch] += re;
-                    sum_im[ch] += im;
-                    count[ch]++;
-                }
-            }
-        }
-
-        for (int ch = 0; ch < channels; ch++) {
-            if (count[ch] > 0) {
-                r->off_source_re[bl][ch] = sum_re[ch] / count[ch];
-                r->off_source_im[bl][ch] = sum_im[ch] / count[ch];
-            } else {
-                r->off_source_re[bl][ch] = 0;
-                r->off_source_im[bl][ch] = 0;
-            }
-        }
-
-        free(sum_re);
-        free(sum_im);
-        free(count);
-    }
-}
-
 static void compute_uvw(struct SvfitsReaderImpl* r, int bl, double mjd,
                         double* u, double* v, double* w) {
     int ant0 = r->user.vispar.visinfo[bl].ant0;
@@ -156,7 +68,6 @@ static void compute_uvw(struct SvfitsReaderImpl* r, int bl, double mjd,
     double bz = r->user.corr->antenna[ant1].bz - r->user.corr->antenna[ant0].bz;
 
     double ha = get_ha(&r->user, mjd);
-    double ra = r->user.burst.ra_app;
     double dec = r->user.burst.dec_app;
 
     double sin_ha = sin(ha);
@@ -202,15 +113,11 @@ SvfitsReader reader_create(const ReaderConfig* config) {
     r->user.corr = (CorrType*)malloc(sizeof(CorrType));
     if (!r->user.corr) { fprintf(stderr, "Failed to alloc corr\n"); return NULL; }
 
-    // Don't set srec->corr here - init_user does it
-
-    printf("reader_create: allocations done\n"); fflush(stdout);
     return r;
 }
 
 int reader_init(SvfitsReader reader) {
     struct SvfitsReaderImpl* r = reader;
-    printf("reader_init: starting\n"); fflush(stdout);
 
     char param_file[1024], antsamp[1024], bulletin[1024];
     strcpy(param_file, r->config.param_file);
@@ -221,8 +128,6 @@ int reader_init(SvfitsReader reader) {
         strcpy(bulletin, r->config.bulletin_a);
         bulletin_ptr = bulletin;
     }
-
-    printf("reader_init: calling init_user with param=%s ant=%s\n", param_file, antsamp); fflush(stdout);
 
     if (init_user(&r->user, param_file, antsamp, NULL, bulletin_ptr) != 0) {
         fprintf(stderr, "Failed to initialize svfits\n");
@@ -245,14 +150,19 @@ int reader_init(SvfitsReader reader) {
     r->freq_info.freq_end_hz = r->freq_info.freq_start_hz +
         r->freq_info.n_channels * r->freq_info.channel_width_hz;
 
-    // Allocate buffers
-    int baselines = r->user.corr->daspar.baselines;
+    // Allocate buffers - one slice worth
+    int das_baselines = r->user.corr->daspar.baselines;
     int channels = r->user.corr->daspar.channels;
-    size_t recl = baselines * channels * sizeof(float);
+    size_t recl = das_baselines * channels * sizeof(float);
     r->raw_buffer_size = MAX_REC_PER_SLICE * recl;
     r->raw_buffer = malloc(r->raw_buffer_size);
+    if (!r->raw_buffer) {
+        fprintf(stderr, "Failed to allocate raw buffer (%zu bytes)\n", r->raw_buffer_size);
+        return -1;
+    }
 
-    // Allocate bandpass arrays
+    // Allocate bandpass arrays for selected baselines
+    int baselines = r->user.baselines;
     r->bandpass = malloc(baselines * sizeof(float*));
     r->off_source_re = malloc(baselines * sizeof(float*));
     r->off_source_im = malloc(baselines * sizeof(float*));
@@ -300,7 +210,6 @@ double reader_get_wavelength(SvfitsReader reader) {
 
 size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* user_data) {
     struct SvfitsReaderImpl* r = reader;
-    fprintf(stderr, "DEBUG reader_process: enter\n"); fflush(stderr);
     if (!r->initialized) {
         fprintf(stderr, "Reader not initialized\n");
         return 0;
@@ -310,175 +219,110 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
     int channels = r->user.corr->daspar.channels;
     int baselines = r->user.baselines;
     int nfiles = r->user.recfile.nfiles;
+    int rec_per_slice = r->user.recfile.rec_per_slice;
     size_t recl = r->user.corr->daspar.baselines * channels * sizeof(float);
-    fprintf(stderr, "DEBUG: channels=%d baselines=%d nfiles=%d recl=%zu\n", channels, baselines, nfiles, recl); fflush(stderr);
 
     int file_order[MaxRecFiles];
-    fprintf(stderr, "DEBUG: calling get_file_order\n"); fflush(stderr);
     get_file_order(&r->user, file_order);
-    fprintf(stderr, "DEBUG: get_file_order done\n"); fflush(stderr);
 
-    // Process each file
+    printf("Processing: %d files, %d baselines, %d channels, rec_per_slice=%d\n",
+           nfiles, baselines, channels, rec_per_slice);
+
+    // Process each file in burst order
     for (int f = 0; f < nfiles; f++) {
         int file_idx = file_order[f];
-        fprintf(stderr, "DEBUG: file %d/%d, file_idx=%d, n_rec=%d\n", f, nfiles, file_idx, r->user.recfile.n_rec[file_idx]); fflush(stderr);
 
-        if (r->user.recfile.n_rec[file_idx] <= 0) continue;
-
-        // Read raw data
-        fprintf(stderr, "DEBUG: calling read_slice file_idx=%d\n", file_idx); fflush(stderr);
-        if (read_slice(&r->user, file_idx, 0, r->raw_buffer) != 0) {
-            fprintf(stderr, "Failed to read file %d\n", file_idx);
-            continue;
-        }
-        fprintf(stderr, "DEBUG: read_slice done\n"); fflush(stderr);
-
-        // Compute bandpass and off-source
-        fprintf(stderr, "DEBUG: compute bandpass/off-source\n"); fflush(stderr);
-        if (r->config.do_bandpass) {
-            compute_bandpass(r, file_idx, r->raw_buffer);
-        }
-        if (r->config.do_baseline) {
-            compute_off_source(r, file_idx, r->raw_buffer);
-        }
-        fprintf(stderr, "DEBUG: bandpass/off-source done\n"); fflush(stderr);
-
-        // Process records with burst
         int start_rec = r->user.recfile.start_rec[file_idx];
         int n_rec = r->user.recfile.n_rec[file_idx];
-        fprintf(stderr, "DEBUG: start_rec=%d n_rec=%d MAX_REC_PER_SLICE=%d\n", start_rec, n_rec, MAX_REC_PER_SLICE); fflush(stderr);
 
-        // Clamp n_rec to not exceed slice bounds
-        // TODO: This is a workaround - properly handle multiple slices
-        if (start_rec + n_rec > MAX_REC_PER_SLICE) {
-            fprintf(stderr, "WARNING: n_rec=%d exceeds slice capacity, clamping to %d\n",
-                    n_rec, MAX_REC_PER_SLICE - start_rec);
-            n_rec = MAX_REC_PER_SLICE - start_rec;
-            if (n_rec <= 0) {
-                fprintf(stderr, "ERROR: start_rec=%d >= MAX_REC_PER_SLICE, skipping file\n", start_rec);
+        if (n_rec <= 0) continue;
+
+        // Calculate which slices we need to read for this file
+        int start_slice = start_rec / rec_per_slice;
+        int end_rec = start_rec + n_rec - 1;
+        int end_slice = end_rec / rec_per_slice;
+
+        printf("  File %d: start_rec=%d n_rec=%d, slices %d-%d\n",
+               file_idx, start_rec, n_rec, start_slice, end_slice);
+
+        // Process each slice that contains burst data
+        for (int slice = start_slice; slice <= end_slice; slice++) {
+            // Read this slice
+            if (read_slice(&r->user, file_idx, slice, r->raw_buffer) != 0) {
+                fprintf(stderr, "Failed to read file %d slice %d\n", file_idx, slice);
                 continue;
             }
-        }
 
-        for (int rec = start_rec; rec < start_rec + n_rec; rec++) {
-            char* rec_ptr = r->raw_buffer + rec * recl;
-            if (rec == start_rec) {
-                fprintf(stderr, "DEBUG: raw_buffer=%p rec_ptr=%p rec=%d recl=%zu offset=%zu buf_size=%zu\n",
-                        (void*)r->raw_buffer, (void*)rec_ptr, rec, recl, (size_t)(rec * recl), r->raw_buffer_size); fflush(stderr);
-            }
+            // Determine which records within this slice to process
+            int slice_start_rec = slice * rec_per_slice;
+            int slice_end_rec = slice_start_rec + rec_per_slice - 1;
 
-            double t_rec = r->user.recfile.t_start[file_idx] +
-                rec * r->user.recfile.t_slice / MAX_REC_PER_SLICE;
-            double mjd = r->user.recfile.mjd_ref + t_rec / 86400.0;
+            // Intersect with burst range [start_rec, start_rec + n_rec - 1]
+            int proc_start = (start_rec > slice_start_rec) ? start_rec : slice_start_rec;
+            int proc_end = (end_rec < slice_end_rec) ? end_rec : slice_end_rec;
 
-            init_mat(&r->user, mjd);
+            // Convert to slice-local indices (0 to rec_per_slice-1)
+            int local_start = proc_start - slice_start_rec;
+            int local_end = proc_end - slice_start_rec;
 
-            int start_ch = r->user.bpass.start_chan[rec];
-            int end_ch = r->user.bpass.end_chan[rec];
-            if (rec == start_rec) {
-                fprintf(stderr, "DEBUG: rec=%d start_ch=%d end_ch=%d\n", rec, start_ch, end_ch); fflush(stderr);
-            }
+            // Process records within this slice
+            for (int local_rec = local_start; local_rec <= local_end; local_rec++) {
+                int global_rec = slice_start_rec + local_rec;
+                char* rec_ptr = r->raw_buffer + local_rec * recl;
 
-            // Process each baseline
-            for (int bl = 0; bl < baselines; bl++) {
-                if (bl == 0 && rec == start_rec) {
-                    fprintf(stderr, "DEBUG: first bl, visinfo[0].off=%lu ant0=%d ant1=%d\n",
-                            r->user.vispar.visinfo[0].off,
-                            r->user.vispar.visinfo[0].ant0,
-                            r->user.vispar.visinfo[0].ant1); fflush(stderr);
-                }
-                unsigned short* vis_ptr = (unsigned short*)(rec_ptr +
-                    r->user.vispar.visinfo[bl].off);
+                // Time for this record
+                double t_rec = r->user.recfile.t_start[file_idx] +
+                    slice * r->user.recfile.slice_interval +
+                    local_rec * r->user.recfile.t_slice / rec_per_slice;
+                double mjd = r->user.recfile.mjd_ref + t_rec / 86400.0;
 
-                double u, v, w;
-                if (bl == 0 && rec == start_rec) {
-                    fprintf(stderr, "DEBUG: calling compute_uvw bl=0\n"); fflush(stderr);
-                }
-                compute_uvw(r, bl, mjd, &u, &v, &w);
-                if (bl == 0 && rec == start_rec) {
-                    fprintf(stderr, "DEBUG: compute_uvw done, u=%f v=%f w=%f\n", u, v, w); fflush(stderr);
-                }
+                init_mat(&r->user, mjd);
 
-                // Collect for flagging
-                float* amps = NULL;
-                int n_amps = 0;
-                if (r->config.do_flag) {
-                    amps = malloc((end_ch - start_ch + 1) * sizeof(float));
-                }
-                if (bl == 0 && rec == start_rec) {
-                    fprintf(stderr, "DEBUG: entering channel loop start_ch=%d end_ch=%d\n", start_ch, end_ch); fflush(stderr);
-                }
+                // Get burst channel range for this record
+                int start_ch = r->user.bpass.start_chan[local_rec];
+                int end_ch = r->user.bpass.end_chan[local_rec];
 
-                // Process channels
-                for (int ch = start_ch; ch <= end_ch; ch++) {
-                    if (bl == 0 && rec == start_rec && ch == start_ch) {
-                        fprintf(stderr, "DEBUG: ch=%d vis_ptr=%p accessing vis_ptr[%d] and vis_ptr[%d]\n",
-                                ch, (void*)vis_ptr, ch*2, ch*2+1); fflush(stderr);
-                        fprintf(stderr, "DEBUG: trying to read vis_ptr[0]...\n"); fflush(stderr);
-                        unsigned short val0 = vis_ptr[0];
-                        fprintf(stderr, "DEBUG: vis_ptr[0]=%u, now vis_ptr[1]...\n", val0); fflush(stderr);
-                        unsigned short val1 = vis_ptr[1];
-                        fprintf(stderr, "DEBUG: vis_ptr[1]=%u, calling half_to_float\n", val1); fflush(stderr);
-                    }
-                    float re = half_to_float(vis_ptr[ch * 2]);
-                    float im = half_to_float(vis_ptr[ch * 2 + 1]);
+                if (start_ch < 0) start_ch = 0;
+                if (end_ch >= channels) end_ch = channels - 1;
+                if (end_ch < start_ch) continue;  // No valid channels
 
-                    if (!isfinite(re) || !isfinite(im)) continue;
+                // Process each baseline
+                for (int bl = 0; bl < baselines; bl++) {
+                    unsigned short* vis_ptr = (unsigned short*)(rec_ptr +
+                        r->user.vispar.visinfo[bl].off);
 
-                    // Flip imaginary if needed
-                    if (r->user.vispar.visinfo[bl].flip) {
-                        im = -im;
-                    }
+                    double u, v, w;
+                    compute_uvw(r, bl, mjd, &u, &v, &w);
 
-                    // Bandpass correction
-                    if (r->config.do_bandpass && r->bandpass[bl][ch] > 0) {
-                        re /= r->bandpass[bl][ch];
-                        im /= r->bandpass[bl][ch];
-                    }
+                    // Process channels with burst signal
+                    for (int ch = start_ch; ch <= end_ch; ch++) {
+                        float re = half_to_float(vis_ptr[ch * 2]);
+                        float im = half_to_float(vis_ptr[ch * 2 + 1]);
 
-                    // Baseline subtraction
-                    if (r->config.do_baseline) {
-                        re -= r->off_source_re[bl][ch];
-                        im -= r->off_source_im[bl][ch];
-                    }
+                        if (!isfinite(re) || !isfinite(im)) continue;
 
-                    float weight = 1.0f;
-
-                    // Collect amplitude for flagging
-                    if (r->config.do_flag) {
-                        amps[n_amps++] = sqrtf(re * re + im * im);
-                    }
-
-                    // Create visibility
-                    CudaVisibility vis;
-                    vis.re = re;
-                    vis.im = im;
-                    vis.weight = weight;
-                    vis.u = (float)u;
-                    vis.v = (float)v;
-                    vis.w = (float)w;
-                    vis.channel = ch;
-
-                    // Apply flagging
-                    if (r->config.do_flag && n_amps > 0) {
-                        float med, mad;
-                        if (robust_stats(n_amps, amps, &med, &mad) == 0) {
-                            float amp = sqrtf(re * re + im * im);
-                            if (fabsf(amp - med) > r->config.flag_threshold * mad) {
-                                vis.weight = -1.0f;
-                            }
+                        // Flip imaginary if needed
+                        if (r->user.vispar.visinfo[bl].flip) {
+                            im = -im;
                         }
-                    }
 
-                    // Callback
-                    if (callback(&vis, user_data) != 0) {
-                        if (amps) free(amps);
-                        return count;
+                        // Create visibility
+                        CudaVisibility vis;
+                        vis.re = re;
+                        vis.im = im;
+                        vis.weight = 1.0f;
+                        vis.u = (float)u;
+                        vis.v = (float)v;
+                        vis.w = (float)w;
+                        vis.channel = ch;
+
+                        // Callback to gridder
+                        if (callback(&vis, user_data) != 0) {
+                            return count;
+                        }
+                        count++;
                     }
-                    count++;
                 }
-
-                if (amps) free(amps);
             }
         }
     }
@@ -492,24 +336,26 @@ void reader_free(SvfitsReader reader) {
 
     if (r->raw_buffer) free(r->raw_buffer);
 
-    int baselines = r->user.corr->daspar.baselines;
-    if (r->bandpass) {
-        for (int bl = 0; bl < baselines; bl++) {
-            free(r->bandpass[bl]);
+    if (r->initialized) {
+        int baselines = r->user.baselines;
+        if (r->bandpass) {
+            for (int bl = 0; bl < baselines; bl++) {
+                free(r->bandpass[bl]);
+            }
+            free(r->bandpass);
         }
-        free(r->bandpass);
-    }
-    if (r->off_source_re) {
-        for (int bl = 0; bl < baselines; bl++) {
-            free(r->off_source_re[bl]);
+        if (r->off_source_re) {
+            for (int bl = 0; bl < baselines; bl++) {
+                free(r->off_source_re[bl]);
+            }
+            free(r->off_source_re);
         }
-        free(r->off_source_re);
-    }
-    if (r->off_source_im) {
-        for (int bl = 0; bl < baselines; bl++) {
-            free(r->off_source_im[bl]);
+        if (r->off_source_im) {
+            for (int bl = 0; bl < baselines; bl++) {
+                free(r->off_source_im[bl]);
+            }
+            free(r->off_source_im);
         }
-        free(r->off_source_im);
     }
 
     // Free svfits structures allocated with malloc
