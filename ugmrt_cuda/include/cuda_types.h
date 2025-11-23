@@ -13,8 +13,20 @@
 #ifndef CUDA_TYPES_H
 #define CUDA_TYPES_H
 
+#ifdef __CUDACC__
+// Compiling with nvcc - use CUDA types
 #include <cuda_runtime.h>
 #include <cuComplex.h>
+#else
+// Compiling with regular C compiler - define compatible types
+typedef struct { float x, y; } cuFloatComplex;
+static inline cuFloatComplex make_cuFloatComplex(float r, float i) {
+    cuFloatComplex c; c.x = r; c.y = i; return c;
+}
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
 
 #ifdef __cplusplus
 extern "C" {

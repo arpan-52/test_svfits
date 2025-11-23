@@ -127,8 +127,10 @@ target_link_libraries(cuda_gridder PUBLIC
 )
 
 # CUDA architecture (adjust for your GPU)
+# CUDA 12+ dropped compute_60/70, CUDA 13+ dropped more
+# Default to modern architectures
 set_target_properties(cuda_gridder PROPERTIES
-    CUDA_ARCHITECTURES "60;70;75;80;86"
+    CUDA_ARCHITECTURES "80;86;89;90"
 )
 
 #-----------------------------------------------------------------------------
