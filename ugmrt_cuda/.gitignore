@@ -5,6 +5,7 @@ build/
 
 # Test binaries
 test_init
+test_reader
 
 # Log files
 *.log

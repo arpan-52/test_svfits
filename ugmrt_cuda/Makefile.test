@@ -3,17 +3,21 @@
 CC = gcc
 CFLAGS = -Wall -g -O0
 
-INCLUDES = -Isvfits -Iinclude -I/home/user/test_svfits -I/home/user/test_svfits/ugmrt_imager/svfits
+INCLUDES = -Isvfits -Iinclude -Isrc -I/home/user/test_svfits -I/home/user/test_svfits/ugmrt_imager/svfits
 LIBS = -lcfitsio -lm
 
 SVFITS_SRC = svfits/svsubs.c svfits/utils.c svfits/stats.c svfits/stub_prenut.c
+READER_SRC = src/svfits_reader.c
 
-all: test_init
+all: test_init test_reader
 
 test_init: test_init.c $(SVFITS_SRC)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^ $(LIBS)
 
+test_reader: test_reader.c $(READER_SRC) $(SVFITS_SRC)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^ $(LIBS)
+
 clean:
-	rm -f test_init
+	rm -f test_init test_reader
 
 .PHONY: all clean

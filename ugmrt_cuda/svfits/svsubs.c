@@ -572,45 +572,20 @@ int update_burst(SvSelectionType *user){
 */
 int init_user(SvSelectionType *user, char *uparfile, char *antfile,
 	      char *bhdrfile, char *bulletinA){
-  fprintf(stderr,"DEBUG init_user: enter, user=%p\n", (void*)user); fflush(stderr);
-  fprintf(stderr,"DEBUG init_user: user->corr=%p\n", (void*)user->corr); fflush(stderr);
-  fprintf(stderr,"DEBUG init_user: user->srec=%p\n", (void*)user->srec); fflush(stderr);
-  fprintf(stderr,"DEBUG init_user: user->hdr=%p\n", (void*)user->hdr); fflush(stderr);
-
   VisParType       *vispar=&user->vispar;
-  fprintf(stderr,"DEBUG init_user: got vispar=%p\n", (void*)vispar); fflush(stderr);
-
   CorrType         *corr=user->corr;
-  fprintf(stderr,"DEBUG init_user: corr=%p\n", (void*)corr); fflush(stderr);
-
   CorrParType      *corrpar=&corr->corrpar;
-  fprintf(stderr,"DEBUG init_user: corrpar=%p\n", (void*)corrpar); fflush(stderr);
-
   DasParType       *daspar=&corr->daspar;
-  fprintf(stderr,"DEBUG init_user: daspar=%p\n", (void*)daspar); fflush(stderr);
-
   RecFileParType   *rfile=&user->recfile;
-  fprintf(stderr,"DEBUG init_user: rfile=%p\n", (void*)rfile); fflush(stderr);
-
   ScanRecType      *srec=user->srec;
-  fprintf(stderr,"DEBUG init_user: srec=%p\n", (void*)srec); fflush(stderr);
-
   ScanInfoType     *scan=srec->scan;
-  fprintf(stderr,"DEBUG init_user: scan=%p (from srec->scan)\n", (void*)scan); fflush(stderr);
-
   SourceParType    *source=&scan->source;
-  fprintf(stderr,"DEBUG init_user: source=%p\n", (void*)source); fflush(stderr);
-
   BurstParType     *burst=&user->burst;
-  fprintf(stderr,"DEBUG init_user: burst=%p\n", (void*)burst); fflush(stderr);
-
   int               i;
 
   //open the log file
-  fprintf(stderr,"DEBUG init_user: about to open log file\n"); fflush(stderr);
   if((user->lfp=fopen("svfits.log","w"))==NULL)
   { fprintf(stderr,"Cannot open svfits.log\n"); return -1;}
-  fprintf(stderr,"DEBUG init_user: log file opened\n"); fflush(stderr);
 
   //set timestamp to the middle of the integration
   user->timestamp_off=0.5*daspar->lta*user->statime;
@@ -630,7 +605,7 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile,
   user->start_chan  = 0;
   user->chan_inc    = 1;
   user->force_app   = 1; // force coordinates to be treated as apparent
-  user->fake_data   = 0; // FOR DEBUGGING!!!! SET TO 0 FOR ACTUAL USE
+  user->fake_data   = 0;
   user->do_log=20;
   user->do_flag=1;// flag visibilities with outlier amplitudes
   user->update_burst=1;//recompute parms with some as input (see update_burst())
@@ -648,102 +623,60 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile,
   if((user->lfp=fopen("svfits.log","w"))==NULL)
     {fprintf(stderr,"Unable to open svfits.log\n"); return -1;}
   // initialize the correlator settings
-  fprintf(stderr,"DEBUG: calling init_corr\n"); fflush(stderr);
-  int corr_ret = init_corr(user,antfile);
-  fprintf(stderr,"DEBUG: init_corr returned %d\n", corr_ret); fflush(stderr);
-  if (corr_ret != 0) {
+  if (init_corr(user,antfile) != 0) {
     fprintf(stderr,"init_corr failed!\n");
     return -1;
   }
-  fprintf(stderr,"DEBUG: init_corr succeeded\n"); fflush(stderr);
-  fprintf(stderr,"DEBUG: L659 user->channels=1\n"); fflush(stderr);
   user->channels=1; //only one output channel by default
-  fprintf(stderr,"DEBUG: L660 user->antmask\n"); fflush(stderr);
   user->antmask=1073741823;//30 antennas (C07 and S05 dropped)
-  fprintf(stderr,"DEBUG: L661 srec->corr (srec=%p)\n", (void*)srec); fflush(stderr);
   srec->corr=user->corr;
-  fprintf(stderr,"DEBUG: L662-665 srec fields\n"); fflush(stderr);
   srec->scannum=0;
   srec->scan_id=1;
   srec->source_id=1;
   srec->freq_id=1;
-  fprintf(stderr,"DEBUG: L666 strcpy scan->proj.code (scan=%p)\n", (void*)scan); fflush(stderr);
   strcpy(scan->proj.code,"TEST"); // replace with GTAC project code
-  fprintf(stderr,"DEBUG: L667 strcpy observer\n"); fflush(stderr);
   strcpy(scan->proj.observer,"DUMMY"); // replace with GTAC observer
-  fprintf(stderr,"DEBUG: L668 strcpy title\n"); fflush(stderr);
   strcpy(scan->proj.title,"SPOTLIGHT"); // replace with GTAC observer
-  fprintf(stderr,"DEBUG: L669 scan->proj.antmask (daspar=%p)\n", (void*)daspar); fflush(stderr);
   scan->proj.antmask=daspar->antmask;
-  fprintf(stderr,"DEBUG: L670 scan->proj.bandmask\n"); fflush(stderr);
   scan->proj.bandmask=daspar->bandmask;
-  fprintf(stderr,"DEBUG: L671 scan->proj.seq\n"); fflush(stderr);
   scan->proj.seq=0;
-  fprintf(stderr,"DEBUG: L672 source->antmask (source=%p)\n", (void*)source); fflush(stderr);
   source->antmask=daspar->antmask;
-  fprintf(stderr,"DEBUG: L673 source->bandmask\n"); fflush(stderr);
   source->bandmask=daspar->bandmask;
-  fprintf(stderr,"DEBUG: L674 source->ch_width (corrpar=%p)\n", (void*)corrpar); fflush(stderr);
   source->ch_width=corrpar->f_step;
-  fprintf(stderr,"DEBUG: L675 source->freq[0]\n"); fflush(stderr);
   source->freq[0]=scan->source.freq[1]=500e6; // 500 MHz
-  fprintf(stderr,"DEBUG: L676 source->net_sign\n"); fflush(stderr);
   source->net_sign[0]=scan->source.net_sign[1]=1;//frq increases with chan
-  fprintf(stderr,"DEBUG: L677 source->ra_app\n"); fflush(stderr);
   source->ra_app=source->ra_mean=M_PI/6.0;
-  fprintf(stderr,"DEBUG: L678 source->dec_app\n"); fflush(stderr);
   source->dec_app=source->dec_mean=M_PI/4.0;
-  fprintf(stderr,"DEBUG: L679 strcpy object\n"); fflush(stderr);
   strcpy(scan->source.object,"SPOTLIGHT");
-  fprintf(stderr,"DEBUG: strcpy object done\n"); fflush(stderr);
   //set up some default burst parameters
-  fprintf(stderr,"DEBUG: strcpy burst->name (burst=%p)\n", (void*)burst); fflush(stderr);
   strcpy(burst->name,"TEST-BURST");
-  fprintf(stderr,"DEBUG: burst->name done\n"); fflush(stderr);
-  fprintf(stderr,"DEBUG: burst->t=100\n"); fflush(stderr);
   burst->t=100.0;// 100 seconds after start
-  fprintf(stderr,"DEBUG: burst->dt=0\n"); fflush(stderr);
   burst->dt=0.0;
-  fprintf(stderr,"DEBUG: burst->mjd (corr->daspar.mjd_ref=%f)\n", corr->daspar.mjd_ref); fflush(stderr);
   burst->mjd=corr->daspar.mjd_ref + burst->t/86400;
-  fprintf(stderr,"DEBUG: burst->DM=30\n"); fflush(stderr);
   burst->DM=30.0;// change burst->width also if this is changed
-  fprintf(stderr,"DEBUG: burst->dDM, f, width, int_wd, bm_id\n"); fflush(stderr);
   burst->dDM=0;  // error in DM (unused at the moment)
   burst->f=700.0e6; // Hz
   burst->width=0.23; //observed burst width (changes with burst->DM)
   burst->int_wd=1.0e-3;//intrinsic burst width
   burst->bm_id=0;
-  fprintf(stderr,"DEBUG: burst->ra_app (from source->ra_app)\n"); fflush(stderr);
   burst->ra_app=source->ra_app;
   burst->dec_app=source->dec_app;
-  fprintf(stderr,"DEBUG: user->recentre\n"); fflush(stderr);
   user->recentre=0; // do not recentre visibilties to burst beam coordinates
   /* default parameteters of the raw data files */
-  fprintf(stderr,"DEBUG: rfile->have_idx\n"); fflush(stderr);
   rfile->have_idx=1;// file header includes the index of the file
-  fprintf(stderr,"DEBUG: rfile->nfiles=16\n"); fflush(stderr);
   rfile->nfiles=16; // has to be 16 here so that slice_interval etc. is correct
-  fprintf(stderr,"DEBUG: strcpy rfile->path\n"); fflush(stderr);
   strcpy(rfile->path,".");
-  fprintf(stderr,"DEBUG: for loop fname, rfile=%p\n", (void*)rfile); fflush(stderr);
   for(i=0;i<rfile->nfiles;i++) {
-    fprintf(stderr,"DEBUG: fname[%d]\n", i); fflush(stderr);
     sprintf(rfile->fname[i],"%d.dat",i);// NEED TO UPDATE TO CORRECT CONVENTION
   }
-  fprintf(stderr,"DEBUG: rfile->rec_per_slice\n"); fflush(stderr);
   rfile->rec_per_slice=50; // 50 lta records per slice
   // time duration (sec) of each slice
-  fprintf(stderr,"DEBUG: rfile->t_slice (daspar->lta=%d user->statime=%f)\n", daspar->lta, user->statime); fflush(stderr);
   rfile->t_slice=rfile->rec_per_slice*daspar->lta*user->statime;
   // time interval (sec) between two successive slices
-  fprintf(stderr,"DEBUG: rfile->slice_interval\n"); fflush(stderr);
   rfile->slice_interval=rfile->nfiles*rfile->t_slice;
-  fprintf(stderr,"DEBUG: rfile->t_start loop\n"); fflush(stderr);
   rfile->t_start[0]=0;
   for(i=1;i<rfile->nfiles;i++) // start time for data in file
     rfile->t_start[i]=rfile->t_start[i-1]+rfile->t_slice;
-  fprintf(stderr,"DEBUG: rfile->mjd_ref, user->n_lta, user->n_dut1\n"); fflush(stderr);
   rfile->mjd_ref=0.0;// computed when the first slice is read
   user->n_lta=-1;// process all slices (only used when all_data=1)
   user->n_dut1=0.0;// no dut1 correction available by default
@@ -752,7 +685,6 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile,
 #endif
   //override defaults with actual parameter settings in the binary header
   //file, if specified
-  fprintf(stderr,"DEBUG: checking bhdrfile (bhdrfile=%p)\n", (void*)bhdrfile); fflush(stderr);
   if(bhdrfile && strlen(bhdrfile)){
     FILE *fp;
     if((fp=fopen(bhdrfile,"rb"))==NULL)
@@ -766,22 +698,17 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile,
     // into this. JNC 14/June/25
   }
   // over ride earlier settings by parameters given by the user
-  fprintf(stderr,"DEBUG: calling svuserInp (uparfile=%s)\n", uparfile ? uparfile : "NULL"); fflush(stderr);
   if(svuserInp(uparfile,user)) return -1;
-  fprintf(stderr,"DEBUG: svuserInp done\n"); fflush(stderr);
   if(user->all_chan) user->channels=corr->daspar.channels;
   if(user->all_data){
     user->channels=corr->daspar.channels/user->nchav;
     source->ch_width *=user->nchav;
   }
   //update burst parameters
-  fprintf(stderr,"DEBUG: update_burst\n"); fflush(stderr);
   if(user->update_burst)update_burst(user);
-  fprintf(stderr,"DEBUG: update_burst done, calling init_vispar\n"); fflush(stderr);
   // setup the visibility meta data
   if((user->baselines=init_vispar(user))<=0)
     {fprintf(stderr,"No baselines selected!\n"); return -1;}
-  fprintf(stderr,"DEBUG: init_vispar done, baselines=%d\n", user->baselines); fflush(stderr);
   //open the post-correlation beam file
   if(user->postcorr){
     if((user->pcfp=fopen("svfits_postcorr.dat","wb"))==NULL)
