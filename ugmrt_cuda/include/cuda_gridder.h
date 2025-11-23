@@ -143,6 +143,20 @@ void grid_visibilities(
 );
 
 /**
+ * @brief Simple nearest-neighbor gridding (no CF, for debugging)
+ *
+ * Grids visibilities using nearest-neighbor without convolution function.
+ * Use this to debug the pipeline without CF complications.
+ */
+void grid_visibilities_simple(
+    UVGrid* grid,
+    const CudaVisibility* vis,
+    int n_vis,
+    float scale_u,
+    float scale_v
+);
+
+/**
  * @brief Normalize grid by weights
  *
  * grid[i] /= weights[i] for all pixels with non-zero weight

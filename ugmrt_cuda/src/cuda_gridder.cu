@@ -24,6 +24,52 @@
 // Note: UV coordinates are passed in wavelengths, no C_LIGHT conversion needed
 
 //=============================================================================
+// Simple Debug Gridder (no CF, nearest neighbor)
+//=============================================================================
+
+/**
+ * @brief Simple nearest-neighbor gridding kernel (no convolution)
+ *
+ * For debugging - just accumulates visibility at nearest grid point.
+ * No convolution function, no oversampling, just direct gridding.
+ */
+__global__ void grid_simple_kernel(
+    cuFloatComplex* __restrict__ grid,
+    float* __restrict__ weights,
+    const CudaVisibility* __restrict__ vis,
+    int n_vis,
+    int nx, int ny,
+    float scale_u, float scale_v)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= n_vis) return;
+
+    CudaVisibility v = vis[tid];
+
+    // Skip flagged visibilities
+    if (v.weight <= 0.0f) return;
+
+    // UV to grid: grid = scale * u + N/2
+    float grid_u = scale_u * v.u + nx / 2.0f;
+    float grid_v = scale_v * v.v + ny / 2.0f;
+
+    // Nearest grid point
+    int iu = __float2int_rn(grid_u);
+    int iv = __float2int_rn(grid_v);
+
+    // Bounds check
+    if (iu < 0 || iu >= nx || iv < 0 || iv >= ny) return;
+
+    // Grid index
+    int grid_idx = iv * nx + iu;
+
+    // Simple accumulation (no CF)
+    atomicAdd(&grid[grid_idx].x, v.re * v.weight);
+    atomicAdd(&grid[grid_idx].y, v.im * v.weight);
+    atomicAdd(&weights[grid_idx], v.weight);
+}
+
+//=============================================================================
 // Device helper functions (matching HPG)
 //=============================================================================
 
@@ -596,6 +642,39 @@ void grid_visibilities(
         cf->support,
         cf->oversampling,
         cf->full_size,
+        grid->nx, grid->ny,
+        scale_u, scale_v
+    );
+
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    cudaFree(d_vis);
+}
+
+void grid_visibilities_simple(
+    UVGrid* grid,
+    const CudaVisibility* vis,
+    int n_vis,
+    float scale_u,
+    float scale_v)
+{
+    if (n_vis == 0) return;
+
+    // Copy visibilities to GPU
+    CudaVisibility* d_vis;
+    CUDA_CHECK(cudaMalloc(&d_vis, n_vis * sizeof(CudaVisibility)));
+    CUDA_CHECK(cudaMemcpy(d_vis, vis, n_vis * sizeof(CudaVisibility), cudaMemcpyHostToDevice));
+
+    // Launch simple kernel (no CF)
+    int block_size = 256;
+    int n_blocks = (n_vis + block_size - 1) / block_size;
+
+    grid_simple_kernel<<<n_blocks, block_size>>>(
+        grid->d_grid,
+        grid->d_weights,
+        d_vis,
+        n_vis,
         grid->nx, grid->ny,
         scale_u, scale_v
     );

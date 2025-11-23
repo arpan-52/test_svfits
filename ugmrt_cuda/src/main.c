@@ -30,6 +30,7 @@ typedef struct {
     UVGrid* grid;
     ConvolutionFunction* cf;
     float scale_u, scale_v;
+    int simple_grid;  // Debug: use simple gridding without CF
 
     // Statistics
     size_t total;
@@ -52,8 +53,15 @@ static int batch_callback(const CudaVisibility* vis, void* user_data) {
 
     // Grid when batch is full
     if (ctx->count >= ctx->capacity) {
-        grid_visibilities(ctx->grid, ctx->vis, ctx->count,
-                          ctx->cf, ctx->scale_u, ctx->scale_v);
+        if (ctx->simple_grid) {
+            // Debug: simple nearest-neighbor gridding (no CF)
+            grid_visibilities_simple(ctx->grid, ctx->vis, ctx->count,
+                                     ctx->scale_u, ctx->scale_v);
+        } else {
+            // Normal gridding with convolution function
+            grid_visibilities(ctx->grid, ctx->vis, ctx->count,
+                              ctx->cf, ctx->scale_u, ctx->scale_v);
+        }
         ctx->gridded += ctx->count;
         ctx->count = 0;
     }
@@ -94,6 +102,8 @@ void print_usage(const char* prog) {
     printf("  --no-bandpass    Disable bandpass correction\n");
     printf("  --no-baseline    Disable baseline subtraction\n");
     printf("  --no-flag        Disable RFI flagging\n");
+    printf("  --simple-grid    Use simple gridding (no CF, for debugging)\n");
+    printf("  --save-uv FILE   Save UV grid to FITS before FFT\n");
     printf("  -h, --help       Show this help\n");
 }
 
@@ -108,12 +118,16 @@ int main(int argc, char* argv[]) {
     int batch_size = 100000;
     float flag_threshold = 5.0f;
     int do_bandpass = 1, do_baseline = 1, do_flag = 1;
+    int simple_grid = 0;  // Debug: simple gridding without CF
+    char uv_output_file[1024] = "";  // Debug: save UV grid
 
     // Parse arguments
     static struct option long_options[] = {
         {"no-bandpass", no_argument, NULL, 1},
         {"no-baseline", no_argument, NULL, 2},
         {"no-flag", no_argument, NULL, 3},
+        {"simple-grid", no_argument, NULL, 4},
+        {"save-uv", required_argument, NULL, 5},
         {"help", no_argument, NULL, 'h'},
         {NULL, 0, NULL, 0}
     };
@@ -136,6 +150,8 @@ int main(int argc, char* argv[]) {
             case 1: do_bandpass = 0; break;
             case 2: do_baseline = 0; break;
             case 3: do_flag = 0; break;
+            case 4: simple_grid = 1; break;
+            case 5: strncpy(uv_output_file, optarg, sizeof(uv_output_file)-1); break;
             case 'h': print_usage(argv[0]); return 0;
             default: print_usage(argv[0]); return 1;
         }
@@ -163,6 +179,10 @@ int main(int argc, char* argv[]) {
     printf("  Bandpass: %s\n", do_bandpass ? "yes" : "no");
     printf("  Baseline: %s\n", do_baseline ? "yes" : "no");
     printf("  Flagging: %s (threshold: %.1f MAD)\n", do_flag ? "yes" : "no", flag_threshold);
+    printf("  Simple grid (debug): %s\n", simple_grid ? "yes" : "no");
+    if (strlen(uv_output_file) > 0) {
+        printf("  Save UV grid: %s\n", uv_output_file);
+    }
     printf("========================================\n\n");
 
     clock_t start_time = clock();
@@ -220,13 +240,18 @@ int main(int argc, char* argv[]) {
     ctx.cf = &cf;
     ctx.scale_u = scale_u;
     ctx.scale_v = scale_v;
+    ctx.simple_grid = simple_grid;
 
     clock_t grid_start = clock();
     reader_process(reader, batch_callback, &ctx);
 
     // Grid remaining visibilities
     if (ctx.count > 0) {
-        grid_visibilities(&grid, ctx.vis, ctx.count, &cf, scale_u, scale_v);
+        if (simple_grid) {
+            grid_visibilities_simple(&grid, ctx.vis, ctx.count, scale_u, scale_v);
+        } else {
+            grid_visibilities(&grid, ctx.vis, ctx.count, &cf, scale_u, scale_v);
+        }
         ctx.gridded += ctx.count;
     }
     clock_t grid_end = clock();
@@ -255,9 +280,14 @@ int main(int argc, char* argv[]) {
     printf("Post-FFT shift (DC from corner to center)...\n");
     grid_shift(&grid);
 
-    // Gridding correction
-    printf("Applying gridding correction...\n");
-    grid_correct(&grid, &cf);
+    // Gridding correction - skip for simple gridding
+    // NOTE: The correction should be FFT of the CF, not hardcoded 1/sinc
+    if (!simple_grid) {
+        printf("Applying gridding correction...\n");
+        grid_correct(&grid, &cf);
+    } else {
+        printf("Skipping gridding correction (simple grid mode)...\n");
+    }
 
     // Copy to host
     grid_to_host(&grid);
