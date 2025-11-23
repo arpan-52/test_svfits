@@ -61,7 +61,7 @@ extern int get_chan_num(double trec, SvSelectionType *user, int *cs, int *ce);
 //-----------------------------------------------------------------------------
 
 static void compute_uvw(struct SvfitsReaderImpl* r, int bl, double mjd,
-                        double* u, double* v, double* w) {
+                        double* u, double* v, double* w, double freq_hz) {
     int ant0 = r->user.vispar.visinfo[bl].ant0;
     int ant1 = r->user.vispar.visinfo[bl].ant1;
 
@@ -77,15 +77,16 @@ static void compute_uvw(struct SvfitsReaderImpl* r, int bl, double mjd,
     double sin_dec = sin(dec);
     double cos_dec = cos(dec);
 
-    *u = sin_ha * bx + cos_ha * by;
-    *v = -sin_dec * cos_ha * bx + sin_dec * sin_ha * by + cos_dec * bz;
-    *w = cos_dec * cos_ha * bx - cos_dec * sin_ha * by + sin_dec * bz;
+    // UVW in meters
+    double u_m = sin_ha * bx + cos_ha * by;
+    double v_m = -sin_dec * cos_ha * bx + sin_dec * sin_ha * by + cos_dec * bz;
+    double w_m = cos_dec * cos_ha * bx - cos_dec * sin_ha * by + sin_dec * bz;
 
-    // Convert to wavelengths
-    double wavelength = 299792458.0 / r->freq_info.freq_start_hz;
-    *u /= wavelength;
-    *v /= wavelength;
-    *w /= wavelength;
+    // Convert directly to wavelengths at this frequency
+    double wavelength = 299792458.0 / freq_hz;
+    *u = u_m / wavelength;
+    *v = v_m / wavelength;
+    *w = w_m / wavelength;
 }
 
 //-----------------------------------------------------------------------------
