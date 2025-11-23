@@ -154,9 +154,9 @@ static void compute_uvw(struct SvfitsReaderImpl* r, int bl, double mjd,
     int ant0 = r->user.vispar.visinfo[bl].ant0;
     int ant1 = r->user.vispar.visinfo[bl].ant1;
 
-    double bx = r->corr.antenna[ant1].x - r->corr.antenna[ant0].x;
-    double by = r->corr.antenna[ant1].y - r->corr.antenna[ant0].y;
-    double bz = r->corr.antenna[ant1].z - r->corr.antenna[ant0].z;
+    double bx = r->corr.antenna[ant1].bx - r->corr.antenna[ant0].bx;
+    double by = r->corr.antenna[ant1].by - r->corr.antenna[ant0].by;
+    double bz = r->corr.antenna[ant1].bz - r->corr.antenna[ant0].bz;
 
     double ha = get_ha(&r->user, mjd);
     double ra = r->user.burst.ra_app;
