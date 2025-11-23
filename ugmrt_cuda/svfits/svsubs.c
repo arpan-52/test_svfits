@@ -655,6 +655,9 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile,
           sizeof(ScanInfoType), sizeof(ProjectType), sizeof(SourceParType)); fflush(stderr);
   fprintf(stderr,"DEBUG init_user: scan->status=%d scan->t=%f\n", scan->status, scan->t); fflush(stderr);
   fprintf(stderr,"DEBUG init_user: about to strcpy to scan->proj.code at %p\n", (void*)scan->proj.code); fflush(stderr);
+  fprintf(stderr,"DEBUG init_user: trying single char write\n"); fflush(stderr);
+  scan->proj.code[0] = 'T';
+  fprintf(stderr,"DEBUG init_user: single char OK, trying strcpy\n"); fflush(stderr);
   strcpy(scan->proj.code,"TEST"); // replace with GTAC project code
   strcpy(scan->proj.observer,"DUMMY"); // replace with GTAC observer
   strcpy(scan->proj.title,"SPOTLIGHT"); // replace with GTAC observer
