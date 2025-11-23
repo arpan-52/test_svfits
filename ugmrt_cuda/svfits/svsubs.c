@@ -572,16 +572,29 @@ int update_burst(SvSelectionType *user){
 */
 int init_user(SvSelectionType *user, char *uparfile, char *antfile,
 	      char *bhdrfile, char *bulletinA){
+  fprintf(stderr,"DEBUG init_user: start, user=%p\n", (void*)user); fflush(stderr);
+
+  fprintf(stderr,"DEBUG init_user: user->corr=%p\n", (void*)user->corr); fflush(stderr);
   VisParType       *vispar=&user->vispar;
   CorrType         *corr=user->corr;
+  fprintf(stderr,"DEBUG init_user: corr=%p\n", (void*)corr); fflush(stderr);
+
   CorrParType      *corrpar=&corr->corrpar;
   DasParType       *daspar=&corr->daspar;
   RecFileParType   *rfile=&user->recfile;
+  fprintf(stderr,"DEBUG init_user: user->srec=%p\n", (void*)user->srec); fflush(stderr);
+
   ScanRecType      *srec=user->srec;
+  fprintf(stderr,"DEBUG init_user: srec=%p, srec->scan=%p\n", (void*)srec, (void*)srec->scan); fflush(stderr);
+
   ScanInfoType     *scan=srec->scan;
+  fprintf(stderr,"DEBUG init_user: scan=%p\n", (void*)scan); fflush(stderr);
+
   SourceParType    *source=&scan->source;
   BurstParType     *burst=&user->burst;
   int               i;
+
+  fprintf(stderr,"DEBUG init_user: pointers OK, opening log\n"); fflush(stderr);
 
   //open the log file
   if((user->lfp=fopen("svfits.log","w"))==NULL)
