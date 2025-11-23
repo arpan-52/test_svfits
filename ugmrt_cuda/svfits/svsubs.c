@@ -572,29 +572,16 @@ int update_burst(SvSelectionType *user){
 */
 int init_user(SvSelectionType *user, char *uparfile, char *antfile,
 	      char *bhdrfile, char *bulletinA){
-  fprintf(stderr,"DEBUG init_user: start, user=%p\n", (void*)user); fflush(stderr);
-
-  fprintf(stderr,"DEBUG init_user: user->corr=%p\n", (void*)user->corr); fflush(stderr);
   VisParType       *vispar=&user->vispar;
   CorrType         *corr=user->corr;
-  fprintf(stderr,"DEBUG init_user: corr=%p\n", (void*)corr); fflush(stderr);
-
   CorrParType      *corrpar=&corr->corrpar;
   DasParType       *daspar=&corr->daspar;
   RecFileParType   *rfile=&user->recfile;
-  fprintf(stderr,"DEBUG init_user: user->srec=%p\n", (void*)user->srec); fflush(stderr);
-
   ScanRecType      *srec=user->srec;
-  fprintf(stderr,"DEBUG init_user: srec=%p, srec->scan=%p\n", (void*)srec, (void*)srec->scan); fflush(stderr);
-
   ScanInfoType     *scan=srec->scan;
-  fprintf(stderr,"DEBUG init_user: scan=%p\n", (void*)scan); fflush(stderr);
-
   SourceParType    *source=&scan->source;
   BurstParType     *burst=&user->burst;
   int               i;
-
-  fprintf(stderr,"DEBUG init_user: pointers OK, opening log\n"); fflush(stderr);
 
   //open the log file
   if((user->lfp=fopen("svfits.log","w"))==NULL)
@@ -632,49 +619,21 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile,
   user->bpass.slice=-1;
   strcpy(user->fitsfile,"TEST.FITS") ;
   /* default parameters, reset by reading input scanfile*/
-  fprintf(stderr,"DEBUG init_user: user->hdr=%p\n", (void*)user->hdr); fflush(stderr);
-  fprintf(stderr,"DEBUG init_user: about to write user->hdr->scans\n"); fflush(stderr);
   user->hdr->scans=user->scans;
-  fprintf(stderr,"DEBUG init_user: hdr->scans done, opening log again\n"); fflush(stderr);
   if((user->lfp=fopen("svfits.log","w"))==NULL)
     {fprintf(stderr,"Unable to open svfits.log\n"); return -1;}
-  fprintf(stderr,"DEBUG init_user: calling init_corr with antfile=%s\n", antfile); fflush(stderr);
   // initialize the correlator settings
   init_corr(user,antfile); // hardcoded for now
-  fprintf(stderr,"DEBUG init_user: init_corr done\n"); fflush(stderr);
   user->channels=1; //only one output channel by default
   user->antmask=1073741823;//30 antennas (C07 and S05 dropped)
-  fprintf(stderr,"DEBUG init_user: setting srec fields\n"); fflush(stderr);
   srec->corr=user->corr;
   srec->scannum=0;
   srec->scan_id=1;
   srec->source_id=1;
   srec->freq_id=1;
-  fprintf(stderr,"DEBUG init_user: scan=%p scan->proj=%p\n", (void*)scan, (void*)&scan->proj); fflush(stderr);
-  fprintf(stderr,"DEBUG init_user: sizeof(ScanInfoType)=%zu sizeof(ProjectType)=%zu sizeof(SourceParType)=%zu\n",
-          sizeof(ScanInfoType), sizeof(ProjectType), sizeof(SourceParType)); fflush(stderr);
-  fprintf(stderr,"DEBUG init_user: scan->status=%d scan->t=%f\n", scan->status, scan->t); fflush(stderr);
-  fprintf(stderr,"DEBUG init_user: about to strcpy to scan->proj.code at %p\n", (void*)scan->proj.code); fflush(stderr);
-  fprintf(stderr,"DEBUG init_user: trying single char write\n"); fflush(stderr);
-  scan->proj.code[0] = 'T';
-  fprintf(stderr,"DEBUG init_user: single char OK, trying manual copy\n"); fflush(stderr);
-  // Use manual copy instead of strcpy to debug
-  scan->proj.code[0]='T'; scan->proj.code[1]='E'; scan->proj.code[2]='S';
-  scan->proj.code[3]='T'; scan->proj.code[4]='\0';
-  fprintf(stderr,"DEBUG init_user: code done, doing observer\n"); fflush(stderr);
-  scan->proj.observer[0]='D'; scan->proj.observer[1]='U'; scan->proj.observer[2]='M';
-  scan->proj.observer[3]='M'; scan->proj.observer[4]='Y'; scan->proj.observer[5]='\0';
-  fprintf(stderr,"DEBUG init_user: observer done, doing title at %p (offset %zu from proj)\n",
-          (void*)scan->proj.title, (size_t)((char*)scan->proj.title - (char*)&scan->proj)); fflush(stderr);
-  fprintf(stderr,"DEBUG init_user: scan ends at %p, ScanInfoType size=%zu\n",
-          (void*)((char*)scan + sizeof(ScanInfoType)), sizeof(ScanInfoType)); fflush(stderr);
-  fprintf(stderr,"DEBUG init_user: writing title char by char\n"); fflush(stderr);
-  for(int ti=0; ti<5; ti++) {
-    fprintf(stderr,"DEBUG init_user: title[%d] at %p\n", ti, (void*)&scan->proj.title[ti]); fflush(stderr);
-    scan->proj.title[ti] = "SPOT"[ti < 4 ? ti : 3];
-  }
-  scan->proj.title[4]='\0';
-  fprintf(stderr,"DEBUG init_user: title done\n"); fflush(stderr);
+  strcpy(scan->proj.code,"TEST"); // replace with GTAC project code
+  strcpy(scan->proj.observer,"DUMMY"); // replace with GTAC observer
+  strcpy(scan->proj.title,"SPOTLIGHT"); // replace with GTAC observer
   scan->proj.antmask=daspar->antmask;
   scan->proj.bandmask=daspar->bandmask;
   scan->proj.seq=0;

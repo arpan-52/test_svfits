@@ -199,15 +199,9 @@ SvfitsReader reader_create(const ReaderConfig* config) {
 int reader_init(SvfitsReader reader) {
     struct SvfitsReaderImpl* r = reader;
 
-    printf("DEBUG: reader_init start\n");
-    fflush(stdout);
-
     char param_file[1024], antsamp[1024], bulletin[1024];
     strcpy(param_file, r->config.param_file);
     strcpy(antsamp, r->config.antsamp_file);
-
-    printf("DEBUG: param_file=%s antsamp=%s\n", param_file, antsamp);
-    fflush(stdout);
 
     char* bulletin_ptr = NULL;
     if (strlen(r->config.bulletin_a) > 0) {
@@ -215,16 +209,10 @@ int reader_init(SvfitsReader reader) {
         bulletin_ptr = bulletin;
     }
 
-    printf("DEBUG: calling init_user\n");
-    fflush(stdout);
-
     if (init_user(&r->user, param_file, antsamp, NULL, bulletin_ptr) != 0) {
         fprintf(stderr, "Failed to initialize svfits\n");
         return -1;
     }
-
-    printf("DEBUG: init_user returned OK\n");
-    fflush(stdout);
 
     // Extract burst info
     strcpy(r->burst_info.name, r->user.burst.name);
