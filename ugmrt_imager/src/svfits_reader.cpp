@@ -137,9 +137,9 @@ public:
                 AntennaInfo ant;
                 ant.id = i;
                 ant.name = corr_.antenna[i].name;
-                ant.x = corr_.antenna[i].x;
-                ant.y = corr_.antenna[i].y;
-                ant.z = corr_.antenna[i].z;
+                ant.x = corr_.antenna[i].bx;
+                ant.y = corr_.antenna[i].by;
+                ant.z = corr_.antenna[i].bz;
                 antennas_.push_back(ant);
             }
         }
@@ -279,9 +279,9 @@ public:
         int ant0 = baselines_[bl].ant0;
         int ant1 = baselines_[bl].ant1;
 
-        double bx = corr_.antenna[ant1].x - corr_.antenna[ant0].x;
-        double by = corr_.antenna[ant1].y - corr_.antenna[ant0].y;
-        double bz = corr_.antenna[ant1].z - corr_.antenna[ant0].z;
+        double bx = corr_.antenna[ant1].bx - corr_.antenna[ant0].bx;
+        double by = corr_.antenna[ant1].by - corr_.antenna[ant0].by;
+        double bz = corr_.antenna[ant1].bz - corr_.antenna[ant0].bz;
 
         // Get hour angle
         double ha = get_ha(&user_, mjd);
