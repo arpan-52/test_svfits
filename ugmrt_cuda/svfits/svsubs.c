@@ -668,15 +668,13 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile,
           (void*)scan->proj.title, (size_t)((char*)scan->proj.title - (char*)&scan->proj)); fflush(stderr);
   fprintf(stderr,"DEBUG init_user: scan ends at %p, ScanInfoType size=%zu\n",
           (void*)((char*)scan + sizeof(ScanInfoType)), sizeof(ScanInfoType)); fflush(stderr);
-  scan->proj.title[0]='S';
-  fprintf(stderr,"DEBUG init_user: title[0] ok at %p\n", (void*)&scan->proj.title[0]); fflush(stderr);
-  fprintf(stderr,"DEBUG init_user: title[1] addr=%p\n", (void*)&scan->proj.title[1]); fflush(stderr);
-  volatile char *t1 = &scan->proj.title[1];
-  fprintf(stderr,"DEBUG init_user: writing 'P' to t1=%p\n", (void*)t1); fflush(stderr);
-  *t1 = 'P';
-  fprintf(stderr,"DEBUG init_user: title[1] ok\n"); fflush(stderr);
-  scan->proj.title[2]='O';
-  scan->proj.title[3]='T'; scan->proj.title[4]='\0';
+  fprintf(stderr,"DEBUG init_user: writing title char by char\n"); fflush(stderr);
+  for(int ti=0; ti<5; ti++) {
+    fprintf(stderr,"DEBUG init_user: title[%d] at %p\n", ti, (void*)&scan->proj.title[ti]); fflush(stderr);
+    scan->proj.title[ti] = "SPOT"[ti < 4 ? ti : 3];
+  }
+  scan->proj.title[4]='\0';
+  fprintf(stderr,"DEBUG init_user: title done\n"); fflush(stderr);
   scan->proj.antmask=daspar->antmask;
   scan->proj.bandmask=daspar->bandmask;
   scan->proj.seq=0;
