@@ -651,6 +651,10 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile,
   srec->source_id=1;
   srec->freq_id=1;
   fprintf(stderr,"DEBUG init_user: scan=%p scan->proj=%p\n", (void*)scan, (void*)&scan->proj); fflush(stderr);
+  fprintf(stderr,"DEBUG init_user: sizeof(ScanInfoType)=%zu sizeof(ProjectType)=%zu sizeof(SourceParType)=%zu\n",
+          sizeof(ScanInfoType), sizeof(ProjectType), sizeof(SourceParType)); fflush(stderr);
+  fprintf(stderr,"DEBUG init_user: scan->status=%d scan->t=%f\n", scan->status, scan->t); fflush(stderr);
+  fprintf(stderr,"DEBUG init_user: about to strcpy to scan->proj.code at %p\n", (void*)scan->proj.code); fflush(stderr);
   strcpy(scan->proj.code,"TEST"); // replace with GTAC project code
   strcpy(scan->proj.observer,"DUMMY"); // replace with GTAC observer
   strcpy(scan->proj.title,"SPOTLIGHT"); // replace with GTAC observer
