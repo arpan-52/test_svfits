@@ -1,0 +1,14 @@
+# Build artifacts
+build/
+*.o
+*.a
+
+# Test binaries
+test_init
+
+# Log files
+*.log
+
+# Test data files (copies from parent directory)
+antsamp.hdr
+svfits_par.txt
