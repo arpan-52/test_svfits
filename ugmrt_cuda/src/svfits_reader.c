@@ -21,12 +21,9 @@
 struct SvfitsReaderImpl {
     ReaderConfig config;
 
-    // svfits structures
+    // svfits structures - use pointers like original svfits.c
     SvSelectionType user;
-    CorrType corr;
-    ScanRecType srec;
-    ScanInfoType scan;
-    InitHdrType hdr;
+    // These are allocated separately with malloc (not embedded)
 
     // Derived info
     BurstInfo burst_info;
@@ -62,9 +59,9 @@ extern int robust_stats(int n, float *x, float *med, float *mad);
 //-----------------------------------------------------------------------------
 
 static void compute_bandpass(struct SvfitsReaderImpl* r, int file_idx, char* raw_buf) {
-    int channels = r->corr.daspar.channels;
+    int channels = r->user.corr->daspar.channels;
     int baselines = r->user.baselines;
-    size_t recl = r->corr.daspar.baselines * channels * sizeof(float);
+    size_t recl = r->user.corr->daspar.baselines * channels * sizeof(float);
 
     short* start_chan = r->user.bpass.start_chan;
     short* end_chan = r->user.bpass.end_chan;
@@ -102,9 +99,9 @@ static void compute_bandpass(struct SvfitsReaderImpl* r, int file_idx, char* raw
 }
 
 static void compute_off_source(struct SvfitsReaderImpl* r, int file_idx, char* raw_buf) {
-    int channels = r->corr.daspar.channels;
+    int channels = r->user.corr->daspar.channels;
     int baselines = r->user.baselines;
-    size_t recl = r->corr.daspar.baselines * channels * sizeof(float);
+    size_t recl = r->user.corr->daspar.baselines * channels * sizeof(float);
 
     short* start_chan = r->user.bpass.start_chan;
     short* end_chan = r->user.bpass.end_chan;
@@ -154,9 +151,9 @@ static void compute_uvw(struct SvfitsReaderImpl* r, int bl, double mjd,
     int ant0 = r->user.vispar.visinfo[bl].ant0;
     int ant1 = r->user.vispar.visinfo[bl].ant1;
 
-    double bx = r->corr.antenna[ant1].bx - r->corr.antenna[ant0].bx;
-    double by = r->corr.antenna[ant1].by - r->corr.antenna[ant0].by;
-    double bz = r->corr.antenna[ant1].bz - r->corr.antenna[ant0].bz;
+    double bx = r->user.corr->antenna[ant1].bx - r->user.corr->antenna[ant0].bx;
+    double by = r->user.corr->antenna[ant1].by - r->user.corr->antenna[ant0].by;
+    double bz = r->user.corr->antenna[ant1].bz - r->user.corr->antenna[ant0].bz;
 
     double ha = get_ha(&r->user, mjd);
     double ra = r->user.burst.ra_app;
@@ -186,12 +183,15 @@ SvfitsReader reader_create(const ReaderConfig* config) {
     struct SvfitsReaderImpl* r = calloc(1, sizeof(struct SvfitsReaderImpl));
     r->config = *config;
 
-    // Link svfits structures
-    r->user.corr = &r->corr;
-    r->user.srec = &r->srec;
-    r->user.hdr = &r->hdr;
-    r->srec.scan = &r->scan;
-    r->srec.corr = &r->corr;
+    // Allocate svfits structures with malloc like original svfits.c does
+    // See svfits.c main() lines 1128-1135
+    r->user.hdr = (InitHdrType*)malloc(sizeof(InitHdrType));
+    r->user.hdr->scans = 1;
+    r->user.srec = (ScanRecType*)malloc(sizeof(ScanRecType));
+    r->user.srec->scan = (ScanInfoType*)malloc(sizeof(ScanInfoType));
+    bzero(r->user.srec->scan, sizeof(ScanInfoType));
+    r->user.corr = (CorrType*)malloc(sizeof(CorrType));
+    r->user.srec->corr = r->user.corr;
 
     return r;
 }
@@ -236,15 +236,15 @@ int reader_init(SvfitsReader reader) {
     r->burst_info.dec_rad = r->user.burst.dec_app;
 
     // Extract freq info
-    r->freq_info.freq_start_hz = r->scan.source.freq[0];
-    r->freq_info.channel_width_hz = r->scan.source.ch_width;
-    r->freq_info.n_channels = r->corr.daspar.channels;
+    r->freq_info.freq_start_hz = r->user.srec->scan->source.freq[0];
+    r->freq_info.channel_width_hz = r->user.srec->scan->source.ch_width;
+    r->freq_info.n_channels = r->user.corr->daspar.channels;
     r->freq_info.freq_end_hz = r->freq_info.freq_start_hz +
         r->freq_info.n_channels * r->freq_info.channel_width_hz;
 
     // Allocate buffers
-    int baselines = r->corr.daspar.baselines;
-    int channels = r->corr.daspar.channels;
+    int baselines = r->user.corr->daspar.baselines;
+    int channels = r->user.corr->daspar.channels;
     size_t recl = baselines * channels * sizeof(float);
     r->raw_buffer_size = MAX_REC_PER_SLICE * recl;
     r->raw_buffer = malloc(r->raw_buffer_size);
@@ -303,10 +303,10 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
     }
 
     size_t count = 0;
-    int channels = r->corr.daspar.channels;
+    int channels = r->user.corr->daspar.channels;
     int baselines = r->user.baselines;
     int nfiles = r->user.recfile.nfiles;
-    size_t recl = r->corr.daspar.baselines * channels * sizeof(float);
+    size_t recl = r->user.corr->daspar.baselines * channels * sizeof(float);
 
     int file_order[MaxRecFiles];
     get_file_order(&r->user, file_order);
@@ -436,7 +436,7 @@ void reader_free(SvfitsReader reader) {
 
     if (r->raw_buffer) free(r->raw_buffer);
 
-    int baselines = r->corr.daspar.baselines;
+    int baselines = r->user.corr->daspar.baselines;
     if (r->bandpass) {
         for (int bl = 0; bl < baselines; bl++) {
             free(r->bandpass[bl]);
@@ -455,6 +455,14 @@ void reader_free(SvfitsReader reader) {
         }
         free(r->off_source_im);
     }
+
+    // Free svfits structures allocated with malloc
+    if (r->user.srec) {
+        if (r->user.srec->scan) free(r->user.srec->scan);
+        free(r->user.srec);
+    }
+    if (r->user.corr) free(r->user.corr);
+    if (r->user.hdr) free(r->user.hdr);
 
     free(r);
 }
