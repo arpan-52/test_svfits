@@ -350,6 +350,10 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
 
         for (int rec = start_rec; rec < start_rec + n_rec; rec++) {
             char* rec_ptr = r->raw_buffer + rec * recl;
+            if (rec == start_rec) {
+                fprintf(stderr, "DEBUG: raw_buffer=%p rec_ptr=%p rec=%d recl=%zu offset=%zu buf_size=%zu\n",
+                        (void*)r->raw_buffer, (void*)rec_ptr, rec, recl, (size_t)(rec * recl), r->raw_buffer_size); fflush(stderr);
+            }
 
             double t_rec = r->user.recfile.t_start[file_idx] +
                 rec * r->user.recfile.t_slice / MAX_REC_PER_SLICE;
@@ -396,7 +400,13 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                 // Process channels
                 for (int ch = start_ch; ch <= end_ch; ch++) {
                     if (bl == 0 && rec == start_rec && ch == start_ch) {
-                        fprintf(stderr, "DEBUG: ch=%d calling half_to_float vis_ptr=%p\n", ch, (void*)vis_ptr); fflush(stderr);
+                        fprintf(stderr, "DEBUG: ch=%d vis_ptr=%p accessing vis_ptr[%d] and vis_ptr[%d]\n",
+                                ch, (void*)vis_ptr, ch*2, ch*2+1); fflush(stderr);
+                        fprintf(stderr, "DEBUG: trying to read vis_ptr[0]...\n"); fflush(stderr);
+                        unsigned short val0 = vis_ptr[0];
+                        fprintf(stderr, "DEBUG: vis_ptr[0]=%u, now vis_ptr[1]...\n", val0); fflush(stderr);
+                        unsigned short val1 = vis_ptr[1];
+                        fprintf(stderr, "DEBUG: vis_ptr[1]=%u, calling half_to_float\n", val1); fflush(stderr);
                     }
                     float re = half_to_float(vis_ptr[ch * 2]);
                     float im = half_to_float(vis_ptr[ch * 2 + 1]);
