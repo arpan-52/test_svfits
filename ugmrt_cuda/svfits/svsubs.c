@@ -657,10 +657,16 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile,
   fprintf(stderr,"DEBUG init_user: about to strcpy to scan->proj.code at %p\n", (void*)scan->proj.code); fflush(stderr);
   fprintf(stderr,"DEBUG init_user: trying single char write\n"); fflush(stderr);
   scan->proj.code[0] = 'T';
-  fprintf(stderr,"DEBUG init_user: single char OK, trying strcpy\n"); fflush(stderr);
-  strcpy(scan->proj.code,"TEST"); // replace with GTAC project code
-  strcpy(scan->proj.observer,"DUMMY"); // replace with GTAC observer
-  strcpy(scan->proj.title,"SPOTLIGHT"); // replace with GTAC observer
+  fprintf(stderr,"DEBUG init_user: single char OK, trying manual copy\n"); fflush(stderr);
+  // Use manual copy instead of strcpy to debug
+  scan->proj.code[0]='T'; scan->proj.code[1]='E'; scan->proj.code[2]='S';
+  scan->proj.code[3]='T'; scan->proj.code[4]='\0';
+  fprintf(stderr,"DEBUG init_user: code done, doing observer\n"); fflush(stderr);
+  scan->proj.observer[0]='D'; scan->proj.observer[1]='U'; scan->proj.observer[2]='M';
+  scan->proj.observer[3]='M'; scan->proj.observer[4]='Y'; scan->proj.observer[5]='\0';
+  fprintf(stderr,"DEBUG init_user: observer done, doing title\n"); fflush(stderr);
+  scan->proj.title[0]='S'; scan->proj.title[1]='P'; scan->proj.title[2]='O';
+  scan->proj.title[3]='T'; scan->proj.title[4]='\0';
   scan->proj.antmask=daspar->antmask;
   scan->proj.bandmask=daspar->bandmask;
   scan->proj.seq=0;
