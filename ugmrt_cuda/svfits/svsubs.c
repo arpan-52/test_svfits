@@ -664,8 +664,13 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile,
   fprintf(stderr,"DEBUG init_user: code done, doing observer\n"); fflush(stderr);
   scan->proj.observer[0]='D'; scan->proj.observer[1]='U'; scan->proj.observer[2]='M';
   scan->proj.observer[3]='M'; scan->proj.observer[4]='Y'; scan->proj.observer[5]='\0';
-  fprintf(stderr,"DEBUG init_user: observer done, doing title\n"); fflush(stderr);
-  scan->proj.title[0]='S'; scan->proj.title[1]='P'; scan->proj.title[2]='O';
+  fprintf(stderr,"DEBUG init_user: observer done, doing title at %p (offset %zu from proj)\n",
+          (void*)scan->proj.title, (size_t)((char*)scan->proj.title - (char*)&scan->proj)); fflush(stderr);
+  fprintf(stderr,"DEBUG init_user: scan ends at %p, ScanInfoType size=%zu\n",
+          (void*)((char*)scan + sizeof(ScanInfoType)), sizeof(ScanInfoType)); fflush(stderr);
+  scan->proj.title[0]='S';
+  fprintf(stderr,"DEBUG init_user: title[0] ok\n"); fflush(stderr);
+  scan->proj.title[1]='P'; scan->proj.title[2]='O';
   scan->proj.title[3]='T'; scan->proj.title[4]='\0';
   scan->proj.antmask=daspar->antmask;
   scan->proj.bandmask=daspar->bandmask;
