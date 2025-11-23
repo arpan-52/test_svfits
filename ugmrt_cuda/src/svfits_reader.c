@@ -346,7 +346,19 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
         // Process records with burst
         int start_rec = r->user.recfile.start_rec[file_idx];
         int n_rec = r->user.recfile.n_rec[file_idx];
-        fprintf(stderr, "DEBUG: start_rec=%d n_rec=%d\n", start_rec, n_rec); fflush(stderr);
+        fprintf(stderr, "DEBUG: start_rec=%d n_rec=%d MAX_REC_PER_SLICE=%d\n", start_rec, n_rec, MAX_REC_PER_SLICE); fflush(stderr);
+
+        // Clamp n_rec to not exceed slice bounds
+        // TODO: This is a workaround - properly handle multiple slices
+        if (start_rec + n_rec > MAX_REC_PER_SLICE) {
+            fprintf(stderr, "WARNING: n_rec=%d exceeds slice capacity, clamping to %d\n",
+                    n_rec, MAX_REC_PER_SLICE - start_rec);
+            n_rec = MAX_REC_PER_SLICE - start_rec;
+            if (n_rec <= 0) {
+                fprintf(stderr, "ERROR: start_rec=%d >= MAX_REC_PER_SLICE, skipping file\n", start_rec);
+                continue;
+            }
+        }
 
         for (int rec = start_rec; rec < start_rec + n_rec; rec++) {
             char* rec_ptr = r->raw_buffer + rec * recl;
