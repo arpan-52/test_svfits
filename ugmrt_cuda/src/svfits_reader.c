@@ -70,7 +70,9 @@ static void compute_uvw(struct SvfitsReaderImpl* r, int bl, double mjd,
     double bz = r->user.corr->antenna[ant1].bz - r->user.corr->antenna[ant0].bz;
 
     double ha = get_ha(&r->user, mjd);
-    double dec = r->user.burst.dec_app;
+    // NOTE: Use source->dec_app (pointing center), NOT burst.dec_app
+    // This matches svfits svgetUvw() which uses source->dec_app for the rotation matrix
+    double dec = r->user.srec->scan->source.dec_app;
 
     double sin_ha = sin(ha);
     double cos_ha = cos(ha);
@@ -482,4 +484,227 @@ void reader_free(SvfitsReader reader) {
     if (r->user.hdr) free(r->user.hdr);
 
     free(r);
+}
+
+//-----------------------------------------------------------------------------
+// Batch/Parallel Processing Implementation
+//-----------------------------------------------------------------------------
+
+VisibilityBuffer* visbuf_create(size_t capacity) {
+    VisibilityBuffer* buf = malloc(sizeof(VisibilityBuffer));
+    if (!buf) return NULL;
+
+    buf->vis = malloc(capacity * sizeof(CudaVisibility));
+    if (!buf->vis) {
+        free(buf);
+        return NULL;
+    }
+    buf->count = 0;
+    buf->capacity = capacity;
+    return buf;
+}
+
+void visbuf_free(VisibilityBuffer* buf) {
+    if (!buf) return;
+    if (buf->vis) free(buf->vis);
+    free(buf);
+}
+
+void visbuf_reset(VisibilityBuffer* buf) {
+    if (buf) buf->count = 0;
+}
+
+size_t reader_estimate_vis_count(SvfitsReader reader) {
+    struct SvfitsReaderImpl* r = reader;
+    if (!r->initialized) return 0;
+
+    // Estimate based on: nfiles * n_rec * baselines * channels_per_burst * 2 (hermitian)
+    int nfiles = r->user.recfile.nfiles;
+    int baselines = r->user.baselines;
+    int channels = r->user.corr->daspar.channels;
+
+    // Sum up n_rec across all files
+    size_t total_recs = 0;
+    for (int f = 0; f < nfiles; f++) {
+        total_recs += r->user.recfile.n_rec[f];
+    }
+
+    // Assume ~10% of channels contain burst (conservative estimate)
+    size_t est_channels = channels / 10;
+    if (est_channels < 100) est_channels = 100;
+
+    // Each visibility generates 2 entries (original + hermitian conjugate)
+    size_t estimate = total_recs * baselines * est_channels * 2;
+
+    printf("Estimated visibility count: %zu (recs=%zu, baselines=%d, est_channels=%zu)\n",
+           estimate, total_recs, baselines, est_channels);
+
+    return estimate;
+}
+
+// Internal helper to add visibility to buffer (with optional resizing)
+static int visbuf_add(VisibilityBuffer* buf, const CudaVisibility* vis) {
+    if (buf->count >= buf->capacity) {
+        // Grow buffer by 50%
+        size_t new_capacity = buf->capacity + buf->capacity / 2;
+        CudaVisibility* new_vis = realloc(buf->vis, new_capacity * sizeof(CudaVisibility));
+        if (!new_vis) {
+            fprintf(stderr, "Failed to grow visibility buffer\n");
+            return -1;
+        }
+        buf->vis = new_vis;
+        buf->capacity = new_capacity;
+    }
+    buf->vis[buf->count++] = *vis;
+    return 0;
+}
+
+ssize_t reader_extract_all(SvfitsReader reader, VisibilityBuffer* buf) {
+    struct SvfitsReaderImpl* r = reader;
+    if (!r->initialized) {
+        fprintf(stderr, "Reader not initialized\n");
+        return -1;
+    }
+
+    visbuf_reset(buf);
+
+    size_t flagged = 0;
+    int channels = r->user.corr->daspar.channels;
+    int baselines = r->user.baselines;
+    int nfiles = r->user.recfile.nfiles;
+    int rec_per_slice = r->user.recfile.rec_per_slice;
+    size_t recl = r->user.corr->daspar.baselines * channels * sizeof(float);
+    double integ = r->user.corr->daspar.lta * r->user.statime;
+    BpassType* bpass = &r->user.bpass;
+
+    int file_order[MaxRecFiles];
+    get_file_order(&r->user, file_order);
+
+    printf("Extracting visibilities: %d files, %d baselines, %d channels\n",
+           nfiles, baselines, channels);
+
+    // Process each file in burst order
+    for (int f = 0; f < nfiles; f++) {
+        int file_idx = file_order[f];
+        int start_rec = r->user.recfile.start_rec[file_idx];
+        int n_rec = r->user.recfile.n_rec[file_idx];
+
+        if (n_rec <= 0) continue;
+
+        int start_slice = start_rec / rec_per_slice;
+        int end_rec = start_rec + n_rec - 1;
+        int end_slice = end_rec / rec_per_slice;
+
+        // Process each slice
+        for (int slice = start_slice; slice <= end_slice; slice++) {
+            if (read_slice(&r->user, file_idx, slice, r->raw_buffer) != 0) {
+                fprintf(stderr, "Failed to read file %d slice %d\n", file_idx, slice);
+                continue;
+            }
+
+            int n_vis = make_bpass(&r->user, bpass, r->raw_buffer, file_idx, slice);
+            if (n_vis < 0) continue;
+
+            int slice_start_rec = slice * rec_per_slice;
+            int slice_end_rec = slice_start_rec + rec_per_slice - 1;
+            int proc_start = (start_rec > slice_start_rec) ? start_rec : slice_start_rec;
+            int proc_end = (end_rec < slice_end_rec) ? end_rec : slice_end_rec;
+            int local_start = proc_start - slice_start_rec;
+            int local_end = proc_end - slice_start_rec;
+
+            // Process records
+            for (int local_rec = local_start; local_rec <= local_end; local_rec++) {
+                char* rec_ptr = r->raw_buffer + local_rec * recl;
+                double t_rec = r->user.recfile.t_start[file_idx] +
+                    slice * r->user.recfile.slice_interval +
+                    (local_rec + 0.5) * integ;
+                double mjd = r->user.recfile.mjd_ref + t_rec / 86400.0;
+
+                init_mat(&r->user, mjd);
+
+                int start_ch = bpass->start_chan[local_rec];
+                int end_ch = bpass->end_chan[local_rec];
+                if (start_ch < 0) start_ch = 0;
+                if (end_ch >= channels) end_ch = channels - 1;
+                if (end_ch < start_ch) continue;
+
+                double freq0 = r->freq_info.freq_start_hz;
+                int net_sign = r->user.srec->scan->source.net_sign[0];
+                double ch_width = r->freq_info.channel_width_hz * net_sign;
+
+                // Process baselines (can be parallelized with OpenMP)
+                #pragma omp parallel for num_threads(r->config.num_threads) schedule(dynamic)
+                for (int bl = 0; bl < baselines; bl++) {
+                    unsigned short* vis_ptr = (unsigned short*)(rec_ptr +
+                        r->user.vispar.visinfo[bl].off);
+
+                    float* abp = bpass->abp[bl];
+                    Complex* off_src = bpass->off_src[bl];
+
+                    for (int ch = start_ch; ch <= end_ch; ch++) {
+                        float re = half_to_float(vis_ptr[ch * 2]);
+                        float im = half_to_float(vis_ptr[ch * 2 + 1]);
+
+                        if (!isfinite(re) || !isfinite(im)) {
+                            #pragma omp atomic
+                            flagged++;
+                            continue;
+                        }
+
+                        if (r->user.do_base) {
+                            re -= off_src[ch].r;
+                            im -= off_src[ch].i;
+                        }
+
+                        if (r->user.do_band && abp[ch] > 0.0f) {
+                            re /= abp[ch];
+                            im /= abp[ch];
+                        }
+
+                        if (r->user.vispar.visinfo[bl].flip) {
+                            im = -im;
+                        }
+
+                        double freq_ch = freq0 + ch * ch_width;
+                        double u, v, w;
+                        compute_uvw(r, bl, mjd, &u, &v, &w, freq_ch);
+
+                        // Create visibility
+                        CudaVisibility vis = {0};
+                        vis.re = re;
+                        vis.im = im;
+                        vis.weight = 1.0f;
+                        vis.u = (float)u;
+                        vis.v = (float)v;
+                        vis.w = (float)w;
+                        vis.channel = ch;
+                        vis.freq = (float)freq_ch;
+
+                        // Add to buffer (thread-safe with critical section)
+                        #pragma omp critical
+                        {
+                            visbuf_add(buf, &vis);
+
+                            // Add Hermitian conjugate
+                            CudaVisibility vis_conj = {0};
+                            vis_conj.re = re;
+                            vis_conj.im = -im;
+                            vis_conj.weight = 1.0f;
+                            vis_conj.u = (float)(-u);
+                            vis_conj.v = (float)(-v);
+                            vis_conj.w = (float)(-w);
+                            vis_conj.channel = ch;
+                            vis_conj.freq = (float)freq_ch;
+                            visbuf_add(buf, &vis_conj);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    printf("  Extracted: %zu visibilities\n", buf->count);
+    printf("  Flagged: %zu\n", flagged);
+
+    return (ssize_t)buf->count;
 }

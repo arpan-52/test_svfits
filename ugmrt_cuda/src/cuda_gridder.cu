@@ -685,6 +685,64 @@ void grid_visibilities_simple(
     cudaFree(d_vis);
 }
 
+void grid_batch(
+    UVGrid* grid,
+    const CudaVisibility* vis_array,
+    size_t n_vis,
+    float scale_u,
+    float scale_v,
+    int use_cf,
+    const ConvolutionFunction* cf)
+{
+    if (n_vis == 0) return;
+
+    printf("Batch gridding %zu visibilities to GPU...\n", n_vis);
+
+    // Allocate device memory for all visibilities at once
+    CudaVisibility* d_vis;
+    CUDA_CHECK(cudaMalloc(&d_vis, n_vis * sizeof(CudaVisibility)));
+
+    // Transfer all visibilities in one operation
+    printf("  Transferring %.1f MB to GPU...\n",
+           n_vis * sizeof(CudaVisibility) / (1024.0 * 1024.0));
+    CUDA_CHECK(cudaMemcpy(d_vis, vis_array, n_vis * sizeof(CudaVisibility), cudaMemcpyHostToDevice));
+
+    // Grid all at once
+    int block_size = 256;
+    int n_blocks = ((int)n_vis + block_size - 1) / block_size;
+
+    if (use_cf && cf && cf->d_values) {
+        // Use CF-based gridding
+        grid_kernel<<<n_blocks, block_size>>>(
+            grid->d_grid,
+            grid->d_weights,
+            d_vis,
+            (int)n_vis,
+            grid->nx, grid->ny,
+            cf->d_values,
+            cf->support,
+            cf->oversampling,
+            scale_u, scale_v
+        );
+    } else {
+        // Simple nearest-neighbor gridding
+        grid_simple_kernel<<<n_blocks, block_size>>>(
+            grid->d_grid,
+            grid->d_weights,
+            d_vis,
+            (int)n_vis,
+            grid->nx, grid->ny,
+            scale_u, scale_v
+        );
+    }
+
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    cudaFree(d_vis);
+    printf("  Batch gridding complete.\n");
+}
+
 void grid_normalize(UVGrid* grid) {
     int n_pixels = grid->nx * grid->ny * grid->n_pol * grid->n_chan;
     int block_size = 256;

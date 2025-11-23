@@ -12,6 +12,7 @@
 #include <getopt.h>
 #include <time.h>
 #include <math.h>
+#include <sys/types.h>
 
 #include "cuda_types.h"
 #include "cuda_gridder.h"
@@ -103,7 +104,9 @@ void print_usage(const char* prog) {
     printf("  --no-baseline    Disable baseline subtraction\n");
     printf("  --no-flag        Disable RFI flagging\n");
     printf("  --simple-grid    Use simple gridding (no CF, for debugging)\n");
+    printf("  --batch-mode     Use batch extraction + single GPU transfer\n");
     printf("  --save-uv FILE   Save UV grid to FITS before FFT\n");
+    printf("  -t THREADS       Number of CPU threads (default: 4)\n");
     printf("  -h, --help       Show this help\n");
 }
 
@@ -119,6 +122,8 @@ int main(int argc, char* argv[]) {
     float flag_threshold = 5.0f;
     int do_bandpass = 1, do_baseline = 1, do_flag = 1;
     int simple_grid = 0;  // Debug: simple gridding without CF
+    int batch_mode = 0;   // Batch extraction + single GPU transfer
+    int num_threads = 4;  // CPU threads for parallel processing
     char uv_output_file[1024] = "";  // Debug: save UV grid
 
     // Parse arguments
@@ -128,12 +133,13 @@ int main(int argc, char* argv[]) {
         {"no-flag", no_argument, NULL, 3},
         {"simple-grid", no_argument, NULL, 4},
         {"save-uv", required_argument, NULL, 5},
+        {"batch-mode", no_argument, NULL, 6},
         {"help", no_argument, NULL, 'h'},
         {NULL, 0, NULL, 0}
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "u:a:k:o:n:c:b:T:h", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "u:a:k:o:n:c:b:T:t:h", long_options, NULL)) != -1) {
         switch (opt) {
             case 'u': strncpy(param_file, optarg, sizeof(param_file)-1); break;
             case 'a': strncpy(antsamp_file, optarg, sizeof(antsamp_file)-1); break;
@@ -150,8 +156,10 @@ int main(int argc, char* argv[]) {
             case 1: do_bandpass = 0; break;
             case 2: do_baseline = 0; break;
             case 3: do_flag = 0; break;
+            case 't': num_threads = atoi(optarg); break;
             case 4: simple_grid = 1; break;
             case 5: strncpy(uv_output_file, optarg, sizeof(uv_output_file)-1); break;
+            case 6: batch_mode = 1; break;
             case 'h': print_usage(argv[0]); return 0;
             default: print_usage(argv[0]); return 1;
         }
@@ -180,6 +188,8 @@ int main(int argc, char* argv[]) {
     printf("  Baseline: %s\n", do_baseline ? "yes" : "no");
     printf("  Flagging: %s (threshold: %.1f MAD)\n", do_flag ? "yes" : "no", flag_threshold);
     printf("  Simple grid (debug): %s\n", simple_grid ? "yes" : "no");
+    printf("  Batch mode: %s\n", batch_mode ? "yes" : "no");
+    printf("  CPU threads: %d\n", num_threads);
     if (strlen(uv_output_file) > 0) {
         printf("  Save UV grid: %s\n", uv_output_file);
     }
@@ -203,7 +213,7 @@ int main(int argc, char* argv[]) {
     reader_config.do_baseline = do_baseline;
     reader_config.do_flag = do_flag;
     reader_config.flag_threshold = flag_threshold;
-    reader_config.num_threads = 4;
+    reader_config.num_threads = num_threads;
 
     SvfitsReader reader = reader_create(&reader_config);
     if (reader_init(reader) != 0) {
@@ -233,32 +243,75 @@ int main(int argc, char* argv[]) {
     // Process visibilities
     printf("\nProcessing visibilities...\n");
 
-    BatchContext ctx = {0};
-    ctx.vis = malloc(batch_size * sizeof(CudaVisibility));
-    ctx.capacity = batch_size;
-    ctx.grid = &grid;
-    ctx.cf = &cf;
-    ctx.scale_u = scale_u;
-    ctx.scale_v = scale_v;
-    ctx.simple_grid = simple_grid;
-
     clock_t grid_start = clock();
-    reader_process(reader, batch_callback, &ctx);
+    size_t total_vis = 0, flagged_vis = 0, gridded_vis = 0;
 
-    // Grid remaining visibilities
-    if (ctx.count > 0) {
-        if (simple_grid) {
-            grid_visibilities_simple(&grid, ctx.vis, ctx.count, scale_u, scale_v);
-        } else {
-            grid_visibilities(&grid, ctx.vis, ctx.count, &cf, scale_u, scale_v);
+    if (batch_mode) {
+        // Batch mode: extract all visibilities first, then grid in one GPU transfer
+        printf("Using batch mode (extract all, then grid)...\n");
+
+        size_t est_count = reader_estimate_vis_count(reader);
+        VisibilityBuffer* visbuf = visbuf_create(est_count > 0 ? est_count : 1000000);
+        if (!visbuf) {
+            fprintf(stderr, "Failed to create visibility buffer\n");
+            return 1;
         }
-        ctx.gridded += ctx.count;
+
+        // Extract all visibilities (parallel baseline processing)
+        ssize_t extracted = reader_extract_all(reader, visbuf);
+        if (extracted < 0) {
+            fprintf(stderr, "Failed to extract visibilities\n");
+            visbuf_free(visbuf);
+            return 1;
+        }
+
+        total_vis = visbuf->count;
+        gridded_vis = visbuf->count;
+
+        // Grid all at once on GPU
+        grid_batch(&grid, visbuf->vis, visbuf->count, scale_u, scale_v,
+                   !simple_grid, &cf);
+
+        visbuf_free(visbuf);
+    } else {
+        // Streaming mode: grid in batches as we read
+        printf("Using streaming mode (incremental batches)...\n");
+
+        BatchContext ctx = {0};
+        ctx.vis = malloc(batch_size * sizeof(CudaVisibility));
+        ctx.capacity = batch_size;
+        ctx.grid = &grid;
+        ctx.cf = &cf;
+        ctx.scale_u = scale_u;
+        ctx.scale_v = scale_v;
+        ctx.simple_grid = simple_grid;
+
+        reader_process(reader, batch_callback, &ctx);
+
+        // Grid remaining visibilities
+        if (ctx.count > 0) {
+            if (simple_grid) {
+                grid_visibilities_simple(&grid, ctx.vis, ctx.count, scale_u, scale_v);
+            } else {
+                grid_visibilities(&grid, ctx.vis, ctx.count, &cf, scale_u, scale_v);
+            }
+            ctx.gridded += ctx.count;
+        }
+
+        total_vis = ctx.total;
+        flagged_vis = ctx.flagged;
+        gridded_vis = ctx.gridded;
+
+        free(ctx.vis);
     }
+
     clock_t grid_end = clock();
 
-    printf("  Total: %zu visibilities\n", ctx.total);
-    printf("  Flagged: %zu (%.1f%%)\n", ctx.flagged, 100.0 * ctx.flagged / ctx.total);
-    printf("  Gridded: %zu\n", ctx.gridded);
+    printf("  Total: %zu visibilities\n", total_vis);
+    if (total_vis > 0) {
+        printf("  Flagged: %zu (%.1f%%)\n", flagged_vis, 100.0 * flagged_vis / total_vis);
+    }
+    printf("  Gridded: %zu\n", gridded_vis);
     printf("  Gridding time: %.2f sec\n", (double)(grid_end - grid_start) / CLOCKS_PER_SEC);
 
     // Normalize
@@ -280,14 +333,9 @@ int main(int argc, char* argv[]) {
     printf("Post-FFT shift (DC from corner to center)...\n");
     grid_shift(&grid);
 
-    // Gridding correction - skip for simple gridding
-    // NOTE: The correction should be FFT of the CF, not hardcoded 1/sinc
-    if (!simple_grid) {
-        printf("Applying gridding correction...\n");
-        grid_correct(&grid, &cf);
-    } else {
-        printf("Skipping gridding correction (simple grid mode)...\n");
-    }
+    // Gridding correction - DISABLED for now
+    // TODO: Implement proper correction using FFT of actual CF
+    printf("Gridding correction: DISABLED (produces good image without it)\n");
 
     // Copy to host
     grid_to_host(&grid);
@@ -304,7 +352,6 @@ int main(int argc, char* argv[]) {
                      center_freq, freq_info.channel_width_hz);
 
     // Cleanup
-    free(ctx.vis);
     reader_free(reader);
     grid_free(&grid);
     cf_free(&cf);

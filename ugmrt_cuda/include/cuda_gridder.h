@@ -224,6 +224,38 @@ void grid_visibilities_hpg(
  */
 void grid_correct_hpg(UVGrid* grid, const HPGConvolutionFunction* cf);
 
+//-----------------------------------------------------------------------------
+// Batch gridding (for parallel processing pipeline)
+//-----------------------------------------------------------------------------
+
+// Forward declaration (actual definition in svfits_reader.h)
+struct VisibilityBuffer;
+
+/**
+ * @brief Grid entire visibility buffer at once (batch mode)
+ *
+ * This is more efficient than incremental gridding when you have
+ * all visibilities available upfront. The buffer is transferred
+ * to GPU in one operation.
+ *
+ * @param grid UV grid to accumulate into
+ * @param vis_array Visibility array (host memory)
+ * @param n_vis Number of visibilities
+ * @param scale_u Grid scale factor for U
+ * @param scale_v Grid scale factor for V
+ * @param use_cf If false, use simple nearest-neighbor gridding
+ * @param cf Convolution function (ignored if use_cf is false)
+ */
+void grid_batch(
+    UVGrid* grid,
+    const CudaVisibility* vis_array,
+    size_t n_vis,
+    float scale_u,
+    float scale_v,
+    int use_cf,
+    const ConvolutionFunction* cf
+);
+
 #ifdef __cplusplus
 }
 #endif

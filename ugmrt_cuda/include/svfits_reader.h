@@ -113,6 +113,51 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
  */
 void reader_free(SvfitsReader reader);
 
+//-----------------------------------------------------------------------------
+// Batch/Parallel Processing API
+//-----------------------------------------------------------------------------
+
+/**
+ * @brief Visibility buffer for batch processing
+ */
+typedef struct {
+    CudaVisibility* vis;    // Visibility array
+    size_t count;           // Number of visibilities
+    size_t capacity;        // Allocated capacity
+} VisibilityBuffer;
+
+/**
+ * @brief Create visibility buffer
+ */
+VisibilityBuffer* visbuf_create(size_t capacity);
+
+/**
+ * @brief Free visibility buffer
+ */
+void visbuf_free(VisibilityBuffer* buf);
+
+/**
+ * @brief Reset buffer (keep allocation)
+ */
+void visbuf_reset(VisibilityBuffer* buf);
+
+/**
+ * @brief Extract all visibilities to buffer (for batch GPU processing)
+ *
+ * This is more efficient than callback-based processing when you want to
+ * accumulate all visibilities before sending to GPU.
+ *
+ * @param reader Reader handle
+ * @param buf Output buffer (will be resized if needed)
+ * @return Number of visibilities extracted, or -1 on error
+ */
+ssize_t reader_extract_all(SvfitsReader reader, VisibilityBuffer* buf);
+
+/**
+ * @brief Get estimated visibility count (for pre-allocation)
+ */
+size_t reader_estimate_vis_count(SvfitsReader reader);
+
 #ifdef __cplusplus
 }
 #endif
