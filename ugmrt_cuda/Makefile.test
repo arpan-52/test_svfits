@@ -1,0 +1,19 @@
+# Simple Makefile for testing without CUDA
+
+CC = gcc
+CFLAGS = -Wall -g -O0
+
+INCLUDES = -Isvfits -Iinclude -I/home/user/test_svfits -I/home/user/test_svfits/ugmrt_imager/svfits
+LIBS = -lcfitsio -lm
+
+SVFITS_SRC = svfits/svsubs.c svfits/utils.c svfits/stats.c svfits/stub_prenut.c
+
+all: test_init
+
+test_init: test_init.c $(SVFITS_SRC)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^ $(LIBS)
+
+clean:
+	rm -f test_init
+
+.PHONY: all clean

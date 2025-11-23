@@ -572,20 +572,45 @@ int update_burst(SvSelectionType *user){
 */
 int init_user(SvSelectionType *user, char *uparfile, char *antfile,
 	      char *bhdrfile, char *bulletinA){
+  fprintf(stderr,"DEBUG init_user: enter, user=%p\n", (void*)user); fflush(stderr);
+  fprintf(stderr,"DEBUG init_user: user->corr=%p\n", (void*)user->corr); fflush(stderr);
+  fprintf(stderr,"DEBUG init_user: user->srec=%p\n", (void*)user->srec); fflush(stderr);
+  fprintf(stderr,"DEBUG init_user: user->hdr=%p\n", (void*)user->hdr); fflush(stderr);
+
   VisParType       *vispar=&user->vispar;
+  fprintf(stderr,"DEBUG init_user: got vispar=%p\n", (void*)vispar); fflush(stderr);
+
   CorrType         *corr=user->corr;
+  fprintf(stderr,"DEBUG init_user: corr=%p\n", (void*)corr); fflush(stderr);
+
   CorrParType      *corrpar=&corr->corrpar;
+  fprintf(stderr,"DEBUG init_user: corrpar=%p\n", (void*)corrpar); fflush(stderr);
+
   DasParType       *daspar=&corr->daspar;
+  fprintf(stderr,"DEBUG init_user: daspar=%p\n", (void*)daspar); fflush(stderr);
+
   RecFileParType   *rfile=&user->recfile;
+  fprintf(stderr,"DEBUG init_user: rfile=%p\n", (void*)rfile); fflush(stderr);
+
   ScanRecType      *srec=user->srec;
+  fprintf(stderr,"DEBUG init_user: srec=%p\n", (void*)srec); fflush(stderr);
+
   ScanInfoType     *scan=srec->scan;
+  fprintf(stderr,"DEBUG init_user: scan=%p (from srec->scan)\n", (void*)scan); fflush(stderr);
+
   SourceParType    *source=&scan->source;
+  fprintf(stderr,"DEBUG init_user: source=%p\n", (void*)source); fflush(stderr);
+
   BurstParType     *burst=&user->burst;
+  fprintf(stderr,"DEBUG init_user: burst=%p\n", (void*)burst); fflush(stderr);
+
   int               i;
 
   //open the log file
+  fprintf(stderr,"DEBUG init_user: about to open log file\n"); fflush(stderr);
   if((user->lfp=fopen("svfits.log","w"))==NULL)
   { fprintf(stderr,"Cannot open svfits.log\n"); return -1;}
+  fprintf(stderr,"DEBUG init_user: log file opened\n"); fflush(stderr);
 
   //set timestamp to the middle of the integration
   user->timestamp_off=0.5*daspar->lta*user->statime;
@@ -623,7 +648,14 @@ int init_user(SvSelectionType *user, char *uparfile, char *antfile,
   if((user->lfp=fopen("svfits.log","w"))==NULL)
     {fprintf(stderr,"Unable to open svfits.log\n"); return -1;}
   // initialize the correlator settings
-  init_corr(user,antfile); // hardcoded for now
+  fprintf(stderr,"DEBUG: calling init_corr\n"); fflush(stderr);
+  int corr_ret = init_corr(user,antfile);
+  fprintf(stderr,"DEBUG: init_corr returned %d\n", corr_ret); fflush(stderr);
+  if (corr_ret != 0) {
+    fprintf(stderr,"init_corr failed!\n");
+    return -1;
+  }
+  fprintf(stderr,"DEBUG: init_corr succeeded\n"); fflush(stderr);
   user->channels=1; //only one output channel by default
   user->antmask=1073741823;//30 antennas (C07 and S05 dropped)
   srec->corr=user->corr;
