@@ -365,11 +365,23 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
 
             // Process each baseline
             for (int bl = 0; bl < baselines; bl++) {
+                if (bl == 0 && rec == start_rec) {
+                    fprintf(stderr, "DEBUG: first bl, visinfo[0].off=%lu ant0=%d ant1=%d\n",
+                            r->user.vispar.visinfo[0].off,
+                            r->user.vispar.visinfo[0].ant0,
+                            r->user.vispar.visinfo[0].ant1); fflush(stderr);
+                }
                 unsigned short* vis_ptr = (unsigned short*)(rec_ptr +
                     r->user.vispar.visinfo[bl].off);
 
                 double u, v, w;
+                if (bl == 0 && rec == start_rec) {
+                    fprintf(stderr, "DEBUG: calling compute_uvw bl=0\n"); fflush(stderr);
+                }
                 compute_uvw(r, bl, mjd, &u, &v, &w);
+                if (bl == 0 && rec == start_rec) {
+                    fprintf(stderr, "DEBUG: compute_uvw done, u=%f v=%f w=%f\n", u, v, w); fflush(stderr);
+                }
 
                 // Collect for flagging
                 float* amps = NULL;
@@ -377,9 +389,15 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                 if (r->config.do_flag) {
                     amps = malloc((end_ch - start_ch + 1) * sizeof(float));
                 }
+                if (bl == 0 && rec == start_rec) {
+                    fprintf(stderr, "DEBUG: entering channel loop start_ch=%d end_ch=%d\n", start_ch, end_ch); fflush(stderr);
+                }
 
                 // Process channels
                 for (int ch = start_ch; ch <= end_ch; ch++) {
+                    if (bl == 0 && rec == start_rec && ch == start_ch) {
+                        fprintf(stderr, "DEBUG: ch=%d calling half_to_float vis_ptr=%p\n", ch, (void*)vis_ptr); fflush(stderr);
+                    }
                     float re = half_to_float(vis_ptr[ch * 2]);
                     float im = half_to_float(vis_ptr[ch * 2 + 1]);
 
