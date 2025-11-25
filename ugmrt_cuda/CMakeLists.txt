@@ -178,6 +178,7 @@ target_include_directories(ugmrt_cuda PRIVATE
 target_link_libraries(ugmrt_cuda PRIVATE
     cuda_gridder
     svfits_reader
+    svfits_core
     fits_output
     m
 )
