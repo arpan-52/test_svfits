@@ -30,7 +30,8 @@ typedef struct {
 
     // Gridding context
     UVGrid* grid;
-    ConvolutionFunction* cf;
+    ConvolutionFunction* cf_simple;
+    HPGConvolutionFunction* cf_hpg;
     float scale_u, scale_v;
     int simple_grid;  // Debug: use simple gridding without CF
 
@@ -59,10 +60,14 @@ static int batch_callback(const CudaVisibility* vis, void* user_data) {
             // Debug: simple nearest-neighbor gridding (no CF)
             grid_visibilities_simple(ctx->grid, ctx->vis, ctx->count,
                                      ctx->scale_u, ctx->scale_v);
-        } else {
-            // Normal gridding with convolution function
+        } else if (ctx->cf_hpg) {
+            // W-projection gridding with HPG CF
+            grid_visibilities_hpg(ctx->grid, ctx->vis, ctx->count,
+                                  ctx->cf_hpg, ctx->scale_u, ctx->scale_v);
+        } else if (ctx->cf_simple) {
+            // Simple CF gridding
             grid_visibilities(ctx->grid, ctx->vis, ctx->count,
-                              ctx->cf, ctx->scale_u, ctx->scale_v);
+                              ctx->cf_simple, ctx->scale_u, ctx->scale_v);
         }
         ctx->gridded += ctx->count;
         ctx->count = 0;
@@ -246,15 +251,11 @@ int main(int argc, char* argv[]) {
 
     clock_t start_time = clock();
 
-    // Load convolution function
-    printf("Loading convolution function...\n");
-    ConvolutionFunction cf = cf_load(cf_file);
+    // Convolution function (simple or HPG)
+    ConvolutionFunction* cf_simple = NULL;
+    HPGConvolutionFunction* cf_hpg = NULL;
 
-    // Create grid
-    printf("Creating UV grid...\n");
-    UVGrid grid = grid_create(nx, ny, 1, 1);
-
-    // Initialize reader
+    // Initialize reader first to get parameters
     ReaderConfig reader_config = {0};
     strncpy(reader_config.param_file, param_file, sizeof(reader_config.param_file)-1);
     strncpy(reader_config.antsamp_file, antsamp_file, sizeof(reader_config.antsamp_file)-1);
@@ -270,12 +271,59 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Get frequency info for grid scaling
+    // Get burst and frequency info
+    BurstInfo burst_info;
+    reader_get_burst_info(reader, &burst_info);
+
     FreqInfo freq_info;
     reader_get_freq_info(reader, &freq_info);
 
-    BurstInfo burst_info;
-    reader_get_burst_info(reader, &burst_info);
+    // Setup CF based on mode
+    if (gen_cf) {
+        // Generate W-projection CF on GPU
+        printf("Generating W-projection convolution functions...\n");
+
+        CFGeneratorConfig cf_config = {0};
+        cf_config.ra_j2000 = burst_info.ra_j2000;
+        cf_config.dec_j2000 = burst_info.dec_j2000;
+        cf_config.freq_hz = freq_info.center_freq;
+        cf_config.cell_rad = cell_size_asec * M_PI / (180.0 * 3600.0);
+        cf_config.grid_nx = nx;
+        cf_config.grid_ny = ny;
+        cf_config.n_w_planes = nW;
+        cf_config.support = cf_support;
+        cf_config.oversampling = cf_oversampling;
+        cf_config.padding = 0;
+        cf_config.n_mueller = 1;
+
+        // Compute max_w from antenna positions
+        double wavelength = 299792458.0 / freq_info.center_freq;
+        double max_baseline_m = 25000.0;  // GMRT max baseline ~25km
+        cf_config.max_w = max_baseline_m * fabs(sin(burst_info.dec_j2000)) / wavelength;
+
+        printf("Max W: %.2f wavelengths (λ=%.3fm, baseline=%.1fkm, dec=%.1f°)\n",
+               cf_config.max_w, wavelength, max_baseline_m/1000.0,
+               burst_info.dec_j2000 * 180.0/M_PI);
+
+        // Generate CF
+        cf_hpg = cf_generate_w_projection(&cf_config);
+        if (!cf_hpg) {
+            fprintf(stderr, "Failed to generate W-projection CF\n");
+            return 1;
+        }
+
+    } else if (strlen(cf_file) > 0) {
+        // Load CF from file
+        printf("Loading convolution function from file...\n");
+        cf_simple = (ConvolutionFunction*)malloc(sizeof(ConvolutionFunction));
+        *cf_simple = cf_load(cf_file);
+    } else {
+        printf("Using simple gridding (no convolution function)\n");
+    }
+
+    // Create grid
+    printf("Creating UV grid...\n");
+    UVGrid grid = grid_create(nx, ny, 1, 1);
 
     // Compute grid scale
     // UV in wavelengths maps to grid: grid = u * scale + N/2
@@ -289,70 +337,41 @@ int main(int argc, char* argv[]) {
     printf("Grid scale: u=%.6f, v=%.6f (max UV: %.1f wavelengths)\n",
            scale_u, scale_v, max_uv);
 
-    // Process visibilities
-    printf("\nProcessing visibilities...\n");
+    // Process visibilities (streaming mode - overlaps CPU/GPU work)
+    printf("\nProcessing visibilities (streaming mode)...\n");
 
     clock_t grid_start = clock();
     size_t total_vis = 0, flagged_vis = 0, gridded_vis = 0;
 
-    if (batch_mode) {
-        // Batch mode: extract all visibilities first, then grid in one GPU transfer
-        printf("Using batch mode (extract all, then grid)...\n");
+    BatchContext ctx = {0};
+    ctx.vis = malloc(batch_size * sizeof(CudaVisibility));
+    ctx.capacity = batch_size;
+    ctx.grid = &grid;
+    ctx.cf_simple = cf_simple;
+    ctx.cf_hpg = cf_hpg;
+    ctx.scale_u = scale_u;
+    ctx.scale_v = scale_v;
+    ctx.simple_grid = simple_grid;
 
-        size_t est_count = reader_estimate_vis_count(reader);
-        VisibilityBuffer* visbuf = visbuf_create(est_count > 0 ? est_count : 1000000);
-        if (!visbuf) {
-            fprintf(stderr, "Failed to create visibility buffer\n");
-            return 1;
+    reader_process(reader, batch_callback, &ctx);
+
+    // Grid remaining visibilities
+    if (ctx.count > 0) {
+        if (simple_grid) {
+            grid_visibilities_simple(&grid, ctx.vis, ctx.count, scale_u, scale_v);
+        } else if (cf_hpg) {
+            grid_visibilities_hpg(&grid, ctx.vis, ctx.count, cf_hpg, scale_u, scale_v);
+        } else if (cf_simple) {
+            grid_visibilities(&grid, ctx.vis, ctx.count, cf_simple, scale_u, scale_v);
         }
-
-        // Extract all visibilities (parallel baseline processing)
-        ssize_t extracted = reader_extract_all(reader, visbuf);
-        if (extracted < 0) {
-            fprintf(stderr, "Failed to extract visibilities\n");
-            visbuf_free(visbuf);
-            return 1;
-        }
-
-        total_vis = visbuf->count;
-        gridded_vis = visbuf->count;
-
-        // Grid all at once on GPU
-        grid_batch(&grid, visbuf->vis, visbuf->count, scale_u, scale_v,
-                   !simple_grid, &cf);
-
-        visbuf_free(visbuf);
-    } else {
-        // Streaming mode: grid in batches as we read
-        printf("Using streaming mode (incremental batches)...\n");
-
-        BatchContext ctx = {0};
-        ctx.vis = malloc(batch_size * sizeof(CudaVisibility));
-        ctx.capacity = batch_size;
-        ctx.grid = &grid;
-        ctx.cf = &cf;
-        ctx.scale_u = scale_u;
-        ctx.scale_v = scale_v;
-        ctx.simple_grid = simple_grid;
-
-        reader_process(reader, batch_callback, &ctx);
-
-        // Grid remaining visibilities
-        if (ctx.count > 0) {
-            if (simple_grid) {
-                grid_visibilities_simple(&grid, ctx.vis, ctx.count, scale_u, scale_v);
-            } else {
-                grid_visibilities(&grid, ctx.vis, ctx.count, &cf, scale_u, scale_v);
-            }
-            ctx.gridded += ctx.count;
-        }
-
-        total_vis = ctx.total;
-        flagged_vis = ctx.flagged;
-        gridded_vis = ctx.gridded;
-
-        free(ctx.vis);
+        ctx.gridded += ctx.count;
     }
+
+    total_vis = ctx.total;
+    flagged_vis = ctx.flagged;
+    gridded_vis = ctx.gridded;
+
+    free(ctx.vis);
 
     clock_t grid_end = clock();
 
