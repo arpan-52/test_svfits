@@ -361,14 +361,6 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                         double u, v, w;
                         compute_uvw(r, bl, mjd, &u, &v, &w, freq_ch);
 
-                        // Flip imaginary and UV if needed (conjugate baseline)
-                        if (r->user.vispar.visinfo[bl].flip) {
-                            im = -im;
-                            u = -u;
-                            v = -v;
-                            w = -w;
-                        }
-
                         // Create visibility - initialize ALL fields
                         CudaVisibility vis = {0};  // Zero-initialize all fields
                         vis.re = re;
@@ -667,14 +659,6 @@ ssize_t reader_extract_all(SvfitsReader reader, VisibilityBuffer* buf) {
                         double freq_ch = freq0 + ch * ch_width;
                         double u, v, w;
                         compute_uvw(r, bl, mjd, &u, &v, &w, freq_ch);
-
-                        // Flip imaginary and UV if needed (conjugate baseline)
-                        if (r->user.vispar.visinfo[bl].flip) {
-                            im = -im;
-                            u = -u;
-                            v = -v;
-                            w = -w;
-                        }
 
                         // Create visibility
                         CudaVisibility vis = {0};
