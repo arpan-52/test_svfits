@@ -291,9 +291,10 @@ int main(int argc, char* argv[]) {
         printf("Generating W-projection convolution functions...\n");
 
         CFGeneratorConfig cf_config = {0};
-        cf_config.ra_j2000 = burst_info.ra_j2000;
-        cf_config.dec_j2000 = burst_info.dec_j2000;
-        cf_config.freq_hz = freq_info.center_freq;
+        cf_config.ra_j2000 = burst_info.ra_rad;
+        cf_config.dec_j2000 = burst_info.dec_rad;
+        double center_freq = (freq_info.freq_start_hz + freq_info.freq_end_hz) / 2.0;
+        cf_config.freq_hz = center_freq;
         cf_config.cell_rad = cell_size_asec * M_PI / (180.0 * 3600.0);
         cf_config.grid_nx = nx;
         cf_config.grid_ny = ny;
@@ -304,14 +305,14 @@ int main(int argc, char* argv[]) {
         cf_config.n_mueller = 1;
 
         // Compute max_w from antenna positions
-        double wavelength = 299792458.0 / freq_info.center_freq;
+        double wavelength = 299792458.0 / center_freq;
         double max_baseline_m = 25000.0;  // GMRT max baseline ~25km
-        cf_config.max_w = max_baseline_m * fabs(sin(burst_info.dec_j2000)) / wavelength;
+        cf_config.max_w = max_baseline_m * fabs(sin(burst_info.dec_rad)) / wavelength;
         max_w_wavelengths = cf_config.max_w;
 
         printf("Max W: %.2f wavelengths (λ=%.3fm, baseline=%.1fkm, dec=%.1f°)\n",
                cf_config.max_w, wavelength, max_baseline_m/1000.0,
-               burst_info.dec_j2000 * 180.0/M_PI);
+               burst_info.dec_rad * 180.0/M_PI);
 
         // Generate CF
         cf_hpg = cf_generate_w_projection(&cf_config);
@@ -449,7 +450,15 @@ int main(int argc, char* argv[]) {
     // Cleanup
     reader_free(reader);
     grid_free(&grid);
-    cf_free(&cf);
+    if (cf_simple) {
+        cf_free(cf_simple);
+        free(cf_simple);
+    }
+    if (cf_hpg) {
+        // TODO: Add cf_hpg_free() function
+        cudaFree(cf_hpg->d_values);
+        free(cf_hpg);
+    }
 
     clock_t end_time = clock();
     double total_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
