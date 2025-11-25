@@ -17,6 +17,7 @@
 #include "cuda_types.h"
 #include "cuda_gridder.h"
 #include "svfits_reader.h"
+#include "cf_generator.h"
 
 //-----------------------------------------------------------------------------
 // Visibility batch accumulator
@@ -89,13 +90,19 @@ extern int write_fits_image(
 
 void print_usage(const char* prog) {
     printf("uGMRT CUDA Imager v1.0\n\n");
-    printf("Usage: %s -u param_file -a antsamp_file -k cf_file [options]\n\n", prog);
+    printf("Usage: %s -u param_file -a antsamp_file [options]\n\n", prog);
     printf("Required:\n");
     printf("  -u FILE    Parameter file (svfits_par.txt format)\n");
-    printf("  -a FILE    Antenna/sampler header file\n");
-    printf("  -k FILE    Convolution kernel file\n\n");
+    printf("  -a FILE    Antenna/sampler header file\n\n");
+    printf("Convolution Function:\n");
+    printf("  -k FILE        Load CF from file (mutually exclusive with --gen-cf)\n");
+    printf("  --gen-cf       Generate W-projection CF on GPU (requires --nW)\n");
+    printf("  --nW NUM       Number of W-planes (required if --gen-cf)\n");
+    printf("  --cf-support N CF support radius in pixels (default: 7)\n");
+    printf("  --cf-oversamp N CF oversampling factor (default: 128)\n\n");
     printf("Optional:\n");
     printf("  -o FILE    Output FITS image (default: burst_image.fits)\n");
+    printf("  --psf FILE Output PSF FITS (default: none)\n");
     printf("  -n NX,NY   Grid size (default: 512,512)\n");
     printf("  -c CELL    Cell size in arcseconds (default: 1.0)\n");
     printf("  -b BATCH   Visibility batch size (default: 100000)\n");
@@ -104,7 +111,6 @@ void print_usage(const char* prog) {
     printf("  --no-baseline    Disable baseline subtraction\n");
     printf("  --no-flag        Disable RFI flagging\n");
     printf("  --simple-grid    Use simple gridding (no CF, for debugging)\n");
-    printf("  --batch-mode     Use batch extraction + single GPU transfer\n");
     printf("  --save-uv FILE   Save UV grid to FITS before FFT\n");
     printf("  -t THREADS       Number of CPU threads (default: 4)\n");
     printf("  -h, --help       Show this help\n");
@@ -116,15 +122,21 @@ int main(int argc, char* argv[]) {
     char antsamp_file[1024] = "";
     char cf_file[1024] = "";
     char output_file[1024] = "burst_image.fits";
+    char psf_file[1024] = "";
     int nx = 512, ny = 512;
     double cell_size_asec = 1.0;
     int batch_size = 100000;
     float flag_threshold = 5.0f;
     int do_bandpass = 1, do_baseline = 1, do_flag = 1;
     int simple_grid = 0;  // Debug: simple gridding without CF
-    int batch_mode = 0;   // Batch extraction + single GPU transfer
     int num_threads = 4;  // CPU threads for parallel processing
     char uv_output_file[1024] = "";  // Debug: save UV grid
+
+    // W-projection CF generation
+    int gen_cf = 0;          // Generate CF instead of loading
+    int nW = 0;              // Number of W-planes
+    int cf_support = 7;      // CF support radius
+    int cf_oversampling = 128;  // CF oversampling factor
 
     // Parse arguments
     static struct option long_options[] = {
@@ -133,7 +145,11 @@ int main(int argc, char* argv[]) {
         {"no-flag", no_argument, NULL, 3},
         {"simple-grid", no_argument, NULL, 4},
         {"save-uv", required_argument, NULL, 5},
-        {"batch-mode", no_argument, NULL, 6},
+        {"gen-cf", no_argument, NULL, 7},
+        {"nW", required_argument, NULL, 8},
+        {"cf-support", required_argument, NULL, 9},
+        {"cf-oversamp", required_argument, NULL, 10},
+        {"psf", required_argument, NULL, 11},
         {"help", no_argument, NULL, 'h'},
         {NULL, 0, NULL, 0}
     };
@@ -159,15 +175,38 @@ int main(int argc, char* argv[]) {
             case 't': num_threads = atoi(optarg); break;
             case 4: simple_grid = 1; break;
             case 5: strncpy(uv_output_file, optarg, sizeof(uv_output_file)-1); break;
-            case 6: batch_mode = 1; break;
+            case 7: gen_cf = 1; break;
+            case 8: nW = atoi(optarg); break;
+            case 9: cf_support = atoi(optarg); break;
+            case 10: cf_oversampling = atoi(optarg); break;
+            case 11: strncpy(psf_file, optarg, sizeof(psf_file)-1); break;
             case 'h': print_usage(argv[0]); return 0;
             default: print_usage(argv[0]); return 1;
         }
     }
 
     // Check required arguments
-    if (strlen(param_file) == 0 || strlen(antsamp_file) == 0 || strlen(cf_file) == 0) {
-        fprintf(stderr, "Error: -u, -a, and -k options are required\n\n");
+    if (strlen(param_file) == 0 || strlen(antsamp_file) == 0) {
+        fprintf(stderr, "Error: -u and -a options are required\n\n");
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    // Check CF configuration
+    if (gen_cf && strlen(cf_file) > 0) {
+        fprintf(stderr, "Error: --gen-cf and -k are mutually exclusive\n\n");
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    if (!gen_cf && strlen(cf_file) == 0 && !simple_grid) {
+        fprintf(stderr, "Error: Must specify either -k (load CF) or --gen-cf (generate CF)\n\n");
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    if (gen_cf && nW == 0) {
+        fprintf(stderr, "Error: --gen-cf requires --nW to be specified\n\n");
         print_usage(argv[0]);
         return 1;
     }

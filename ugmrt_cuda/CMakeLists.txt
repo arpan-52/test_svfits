@@ -115,6 +115,7 @@ target_compile_options(svfits_core PRIVATE -w)
 #-----------------------------------------------------------------------------
 add_library(cuda_gridder STATIC
     src/cuda_gridder.cu
+    src/cf_generator.cu
 )
 
 target_include_directories(cuda_gridder PUBLIC
