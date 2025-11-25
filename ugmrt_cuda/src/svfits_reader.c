@@ -354,17 +354,20 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                             im /= abp[ch];
                         }
 
-                        // Flip imaginary if needed
-                        if (r->user.vispar.visinfo[bl].flip) {
-                            im = -im;
-                        }
-
                         // Channel frequency for MFS
                         double freq_ch = freq0 + ch * ch_width;
 
                         // Compute UVW in wavelengths at this channel's frequency
                         double u, v, w;
                         compute_uvw(r, bl, mjd, &u, &v, &w, freq_ch);
+
+                        // Flip imaginary and UV if needed (conjugate baseline)
+                        if (r->user.vispar.visinfo[bl].flip) {
+                            im = -im;
+                            u = -u;
+                            v = -v;
+                            w = -w;
+                        }
 
                         // Create visibility - initialize ALL fields
                         CudaVisibility vis = {0};  // Zero-initialize all fields
@@ -661,13 +664,17 @@ ssize_t reader_extract_all(SvfitsReader reader, VisibilityBuffer* buf) {
                             im /= abp[ch];
                         }
 
-                        if (r->user.vispar.visinfo[bl].flip) {
-                            im = -im;
-                        }
-
                         double freq_ch = freq0 + ch * ch_width;
                         double u, v, w;
                         compute_uvw(r, bl, mjd, &u, &v, &w, freq_ch);
+
+                        // Flip imaginary and UV if needed (conjugate baseline)
+                        if (r->user.vispar.visinfo[bl].flip) {
+                            im = -im;
+                            u = -u;
+                            v = -v;
+                            w = -w;
+                        }
 
                         // Create visibility
                         CudaVisibility vis = {0};
