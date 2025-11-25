@@ -713,15 +713,16 @@ void grid_batch(
 
     if (use_cf && cf && cf->d_values) {
         // Use CF-based gridding
-        grid_kernel<<<n_blocks, block_size>>>(
+        grid_visibility_kernel<<<n_blocks, block_size>>>(
             grid->d_grid,
             grid->d_weights,
             d_vis,
             (int)n_vis,
-            grid->nx, grid->ny,
             cf->d_values,
             cf->support,
             cf->oversampling,
+            cf->full_size,
+            grid->nx, grid->ny,
             scale_u, scale_v
         );
     } else {
