@@ -9,6 +9,7 @@
 #include <math.h>
 
 #include "svfits_reader.h"
+#include "cf_generator.h"  // For cf_select_w_plane
 
 // Include svfits headers
 #include "svio.h"
@@ -390,7 +391,14 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                         vis.channel = ch;
                         vis.freq = (float)freq_ch;
                         vis.d_phase = 0.0f;
-                        vis.cf_cube = 0;
+
+                        // Select W-plane based on W coordinate
+                        if (r->config.n_w_planes > 0) {
+                            vis.cf_cube = cf_select_w_plane((float)w, r->config.max_w, r->config.n_w_planes);
+                        } else {
+                            vis.cf_cube = 0;
+                        }
+
                         vis.cf_grp = 0;
                         vis.grid_cube = 0;
                         vis.phase_grad_u = 0.0f;
@@ -426,7 +434,14 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                         vis_conj.channel = ch;
                         vis_conj.freq = (float)freq_ch;
                         vis_conj.d_phase = 0.0f;
-                        vis_conj.cf_cube = 0;
+
+                        // Select W-plane for conjugate (using negated W)
+                        if (r->config.n_w_planes > 0) {
+                            vis_conj.cf_cube = cf_select_w_plane((float)(-w), r->config.max_w, r->config.n_w_planes);
+                        } else {
+                            vis_conj.cf_cube = 0;
+                        }
+
                         vis_conj.cf_grp = 0;
                         vis_conj.grid_cube = 0;
                         vis_conj.phase_grad_u = 0.0f;

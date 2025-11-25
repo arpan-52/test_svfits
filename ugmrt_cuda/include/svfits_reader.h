@@ -26,6 +26,10 @@ typedef struct {
     int do_flag;                // Apply RFI flagging
     float flag_threshold;       // Flagging threshold (MAD)
     int num_threads;            // OpenMP threads
+
+    // W-projection parameters
+    int n_w_planes;             // Number of W-planes in CF (0 = no W-projection)
+    float max_w;                // Maximum W value in wavelengths
 } ReaderConfig;
 
 //-----------------------------------------------------------------------------

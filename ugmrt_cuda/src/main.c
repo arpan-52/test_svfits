@@ -255,28 +255,35 @@ int main(int argc, char* argv[]) {
     ConvolutionFunction* cf_simple = NULL;
     HPGConvolutionFunction* cf_hpg = NULL;
 
-    // Initialize reader first to get parameters
-    ReaderConfig reader_config = {0};
-    strncpy(reader_config.param_file, param_file, sizeof(reader_config.param_file)-1);
-    strncpy(reader_config.antsamp_file, antsamp_file, sizeof(reader_config.antsamp_file)-1);
-    reader_config.do_bandpass = do_bandpass;
-    reader_config.do_baseline = do_baseline;
-    reader_config.do_flag = do_flag;
-    reader_config.flag_threshold = flag_threshold;
-    reader_config.num_threads = num_threads;
+    // Initialize reader first to get parameters (for CF generation)
+    ReaderConfig temp_reader_config = {0};
+    strncpy(temp_reader_config.param_file, param_file, sizeof(temp_reader_config.param_file)-1);
+    strncpy(temp_reader_config.antsamp_file, antsamp_file, sizeof(temp_reader_config.antsamp_file)-1);
+    temp_reader_config.do_bandpass = do_bandpass;
+    temp_reader_config.do_baseline = do_baseline;
+    temp_reader_config.do_flag = do_flag;
+    temp_reader_config.flag_threshold = flag_threshold;
+    temp_reader_config.num_threads = num_threads;
+    temp_reader_config.n_w_planes = 0;  // No W-projection params yet
+    temp_reader_config.max_w = 0.0f;
 
-    SvfitsReader reader = reader_create(&reader_config);
-    if (reader_init(reader) != 0) {
+    SvfitsReader temp_reader = reader_create(&temp_reader_config);
+    if (reader_init(temp_reader) != 0) {
         fprintf(stderr, "Failed to initialize reader\n");
         return 1;
     }
 
     // Get burst and frequency info
     BurstInfo burst_info;
-    reader_get_burst_info(reader, &burst_info);
+    reader_get_burst_info(temp_reader, &burst_info);
 
     FreqInfo freq_info;
-    reader_get_freq_info(reader, &freq_info);
+    reader_get_freq_info(temp_reader, &freq_info);
+
+    reader_free(temp_reader);  // Free temporary reader
+
+    // W-projection parameters (computed from CF generation or defaults)
+    float max_w_wavelengths = 0.0f;
 
     // Setup CF based on mode
     if (gen_cf) {
@@ -300,6 +307,7 @@ int main(int argc, char* argv[]) {
         double wavelength = 299792458.0 / freq_info.center_freq;
         double max_baseline_m = 25000.0;  // GMRT max baseline ~25km
         cf_config.max_w = max_baseline_m * fabs(sin(burst_info.dec_j2000)) / wavelength;
+        max_w_wavelengths = cf_config.max_w;
 
         printf("Max W: %.2f wavelengths (λ=%.3fm, baseline=%.1fkm, dec=%.1f°)\n",
                cf_config.max_w, wavelength, max_baseline_m/1000.0,
@@ -319,6 +327,25 @@ int main(int argc, char* argv[]) {
         *cf_simple = cf_load(cf_file);
     } else {
         printf("Using simple gridding (no convolution function)\n");
+    }
+
+    // Create ACTUAL reader with W-projection parameters
+    printf("\nInitializing visibility reader...\n");
+    ReaderConfig reader_config = {0};
+    strncpy(reader_config.param_file, param_file, sizeof(reader_config.param_file)-1);
+    strncpy(reader_config.antsamp_file, antsamp_file, sizeof(reader_config.antsamp_file)-1);
+    reader_config.do_bandpass = do_bandpass;
+    reader_config.do_baseline = do_baseline;
+    reader_config.do_flag = do_flag;
+    reader_config.flag_threshold = flag_threshold;
+    reader_config.num_threads = num_threads;
+    reader_config.n_w_planes = gen_cf ? nW : 0;
+    reader_config.max_w = max_w_wavelengths;
+
+    SvfitsReader reader = reader_create(&reader_config);
+    if (reader_init(reader) != 0) {
+        fprintf(stderr, "Failed to initialize reader\n");
+        return 1;
     }
 
     // Create grid
