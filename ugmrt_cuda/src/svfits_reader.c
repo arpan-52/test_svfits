@@ -51,8 +51,7 @@ extern int init_user(SvSelectionType *user, char *fname, char *anthdr,
 extern int read_slice(SvSelectionType *user, int idx, int slice, char *rbuf);
 extern int get_file_order(SvSelectionType *user, int *order);
 extern void init_mat(SvSelectionType *user, double tm);
-extern void sla_prenut_vis(UvwParType *uvw, double mjd, double ra_app,
-                           double dec_app, double epoch1);
+extern int novas_prenut_vis(SvSelectionType *user, UvwParType *uvw, double mjd);
 extern float half_to_float(const unsigned short x);
 extern double get_ha(SvSelectionType *user, double tm);
 extern int robust_stats(int n, float *x, float *med, float *mad);
@@ -94,16 +93,15 @@ static void compute_uvw(struct SvfitsReaderImpl* r, int bl, double mjd,
     double w_wl = w_m / wavelength;
 
     // Apply J2000 precession/nutation rotation
-    // This matches svfits svsubs.c which calls sla_prenut_vis() when epoch>0
+    // This matches svfits svsubs.c which calls novas_prenut_vis() when USE_NOVAS is ON
     UvwParType uvwpar;
     uvwpar.u = (float)u_wl;
     uvwpar.v = (float)v_wl;
     uvwpar.w = (float)w_wl;
 
     // Rotate UVW from apparent coordinates to J2000
-    // epoch1 = 2000.0 for J2000, uses source RA/DEC (pointing center)
-    double ra = r->user.srec->scan->source.ra_app;
-    sla_prenut_vis(&uvwpar, r->user.recfile.mjd_ref, ra, dec, 2000.0);
+    // Requires SvSelectionType* which has rotation matrices (initialized by init_mat)
+    novas_prenut_vis(&r->user, &uvwpar, r->user.recfile.mjd_ref);
 
     *u = uvwpar.u;
     *v = uvwpar.v;
