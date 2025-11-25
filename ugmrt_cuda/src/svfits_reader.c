@@ -50,6 +50,8 @@ extern int init_user(SvSelectionType *user, char *fname, char *anthdr,
 extern int read_slice(SvSelectionType *user, int idx, int slice, char *rbuf);
 extern int get_file_order(SvSelectionType *user, int *order);
 extern void init_mat(SvSelectionType *user, double tm);
+extern void sla_prenut_vis(UvwParType *uvw, double mjd, double ra_app,
+                           double dec_app, double epoch1);
 extern float half_to_float(const unsigned short x);
 extern double get_ha(SvSelectionType *user, double tm);
 extern int robust_stats(int n, float *x, float *med, float *mad);
@@ -84,11 +86,27 @@ static void compute_uvw(struct SvfitsReaderImpl* r, int bl, double mjd,
     double v_m = -sin_dec * cos_ha * bx + sin_dec * sin_ha * by + cos_dec * bz;
     double w_m = cos_dec * cos_ha * bx - cos_dec * sin_ha * by + sin_dec * bz;
 
-    // Convert directly to wavelengths at this frequency
+    // Convert to wavelengths at this frequency
     double wavelength = 299792458.0 / freq_hz;
-    *u = u_m / wavelength;
-    *v = v_m / wavelength;
-    *w = w_m / wavelength;
+    double u_wl = u_m / wavelength;
+    double v_wl = v_m / wavelength;
+    double w_wl = w_m / wavelength;
+
+    // Apply J2000 precession/nutation rotation
+    // This matches svfits svsubs.c which calls sla_prenut_vis() when epoch>0
+    UvwParType uvwpar;
+    uvwpar.u = (float)u_wl;
+    uvwpar.v = (float)v_wl;
+    uvwpar.w = (float)w_wl;
+
+    // Rotate UVW from apparent coordinates to J2000
+    // epoch1 = 2000.0 for J2000, uses source RA/DEC (pointing center)
+    double ra = r->user.srec->scan->source.ra_app;
+    sla_prenut_vis(&uvwpar, r->user.recfile.mjd_ref, ra, dec, 2000.0);
+
+    *u = uvwpar.u;
+    *v = uvwpar.v;
+    *w = uvwpar.w;
 }
 
 //-----------------------------------------------------------------------------
