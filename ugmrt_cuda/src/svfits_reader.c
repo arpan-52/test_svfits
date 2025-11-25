@@ -400,6 +400,35 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
                             return count;
                         }
                         count++;
+
+                        // Grid Hermitian conjugate: V*(-u,-v,-w)
+                        // For real-valued images, V(u,v) and V*(-u,-v) must both be gridded
+                        CudaVisibility vis_conj = {0};  // Zero-initialize
+                        vis_conj.re = re;           // Real part same
+                        vis_conj.im = -im;          // Imaginary part negated (conjugate)
+                        vis_conj.weight = 1.0f;
+                        vis_conj.u = (float)(-u);   // Negate U
+                        vis_conj.v = (float)(-v);   // Negate V
+                        vis_conj.w = (float)(-w);   // Negate W
+                        vis_conj.channel = ch;
+                        vis_conj.freq = (float)freq_ch;
+                        vis_conj.d_phase = 0.0f;
+                        vis_conj.cf_cube = 0;
+                        vis_conj.cf_grp = 0;
+                        vis_conj.grid_cube = 0;
+                        vis_conj.phase_grad_u = 0.0f;
+                        vis_conj.phase_grad_v = 0.0f;
+
+                        // Track conjugate UV stats
+                        if (-u < u_min) u_min = -u;
+                        if (-u > u_max) u_max = -u;
+                        if (-v < v_min) v_min = -v;
+                        if (-v > v_max) v_max = -v;
+
+                        if (callback(&vis_conj, user_data) != 0) {
+                            return count;
+                        }
+                        count++;
                     }
                 }
             }
@@ -655,6 +684,18 @@ ssize_t reader_extract_all(SvfitsReader reader, VisibilityBuffer* buf) {
                         #pragma omp critical
                         {
                             visbuf_add(buf, &vis);
+
+                            // Add Hermitian conjugate
+                            CudaVisibility vis_conj = {0};
+                            vis_conj.re = re;
+                            vis_conj.im = -im;
+                            vis_conj.weight = 1.0f;
+                            vis_conj.u = (float)(-u);
+                            vis_conj.v = (float)(-v);
+                            vis_conj.w = (float)(-w);
+                            vis_conj.channel = ch;
+                            vis_conj.freq = (float)freq_ch;
+                            visbuf_add(buf, &vis_conj);
                         }
                     }
                 }
