@@ -318,6 +318,10 @@ int main(int argc, char* argv[]) {
     printf("\nNormalizing...\n");
     grid_normalize(&grid);
 
+    // Pre-FFT shift: move DC from center to corner (FFT convention)
+    printf("Pre-FFT shift (DC from center to corner)...\n");
+    grid_shift(&grid);
+
     // FFT - INVERSE to go from UV domain to image domain
     printf("Applying FFT (inverse, UV to image)...\n");
     clock_t fft_start = clock();
@@ -325,8 +329,8 @@ int main(int argc, char* argv[]) {
     clock_t fft_end = clock();
     printf("  FFT time: %.2f sec\n", (double)(fft_end - fft_start) / CLOCKS_PER_SEC);
 
-    // Post-FFT shift: center the image (like libhpg)
-    printf("Post-FFT shift (center image)...\n");
+    // Post-FFT shift: move DC from corner back to center
+    printf("Post-FFT shift (DC from corner to center)...\n");
     grid_shift(&grid);
 
     // Gridding correction - DISABLED for now
