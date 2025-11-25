@@ -218,16 +218,26 @@ int main(int argc, char* argv[]) {
     printf("Configuration:\n");
     printf("  Parameter file: %s\n", param_file);
     printf("  Antenna file: %s\n", antsamp_file);
-    printf("  CF file: %s\n", cf_file);
+    if (gen_cf) {
+        printf("  CF mode: Generate W-projection on GPU\n");
+        printf("  W-planes: %d\n", nW);
+        printf("  CF support: %d pixels\n", cf_support);
+        printf("  CF oversampling: %dx\n", cf_oversampling);
+    } else if (strlen(cf_file) > 0) {
+        printf("  CF file: %s\n", cf_file);
+    } else {
+        printf("  CF mode: Simple gridding (no CF)\n");
+    }
     printf("  Output: %s\n", output_file);
+    if (strlen(psf_file) > 0) {
+        printf("  PSF output: %s\n", psf_file);
+    }
     printf("  Grid: %dx%d\n", nx, ny);
     printf("  Cell size: %.2f arcsec\n", cell_size_asec);
     printf("  Batch size: %d\n", batch_size);
     printf("  Bandpass: %s\n", do_bandpass ? "yes" : "no");
     printf("  Baseline: %s\n", do_baseline ? "yes" : "no");
     printf("  Flagging: %s (threshold: %.1f MAD)\n", do_flag ? "yes" : "no", flag_threshold);
-    printf("  Simple grid (debug): %s\n", simple_grid ? "yes" : "no");
-    printf("  Batch mode: %s\n", batch_mode ? "yes" : "no");
     printf("  CPU threads: %d\n", num_threads);
     if (strlen(uv_output_file) > 0) {
         printf("  Save UV grid: %s\n", uv_output_file);
