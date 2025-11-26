@@ -139,6 +139,7 @@ set_target_properties(cuda_gridder PROPERTIES
 #-----------------------------------------------------------------------------
 add_library(svfits_reader STATIC
     src/svfits_reader.c
+    src/visibility_queue.c
 )
 
 target_include_directories(svfits_reader PUBLIC
@@ -148,6 +149,7 @@ target_include_directories(svfits_reader PUBLIC
 
 target_link_libraries(svfits_reader PUBLIC
     svfits_core
+    pthread
 )
 
 #-----------------------------------------------------------------------------

@@ -10,6 +10,7 @@
 
 #include "svfits_reader.h"
 #include "cf_generator.h"  // For cf_select_w_plane
+#include "visibility_queue.h"  // For parallel file processing
 
 // Include svfits headers
 #include "svio.h"
@@ -247,6 +248,208 @@ double reader_get_wavelength(SvfitsReader reader) {
     return 299792458.0 / center_freq;
 }
 
+//-----------------------------------------------------------------------------
+// Parallel file processing support structures
+//-----------------------------------------------------------------------------
+
+typedef struct {
+    struct SvfitsReaderImpl* reader;  // Shared reader config
+    VisibilityQueue* queue;            // Shared queue
+    int file_idx;                      // File to process
+    size_t* thread_count;              // Count for this thread
+    size_t* thread_flagged;            // Flagged count
+} FileProcessorArgs;
+
+// Worker thread function to process a single file
+static void process_file_to_queue(FileProcessorArgs* args) {
+    struct SvfitsReaderImpl* r = args->reader;
+    int file_idx = args->file_idx;
+    VisibilityQueue* queue = args->queue;
+
+    int start_rec = r->user.recfile.start_rec[file_idx];
+    int n_rec = r->user.recfile.n_rec[file_idx];
+
+    if (n_rec <= 0) {
+        return;
+    }
+
+    // Allocate thread-local buffer for reading
+    int channels = r->user.corr->daspar.channels;
+    int das_baselines = r->user.corr->daspar.baselines;
+    size_t recl = das_baselines * channels * sizeof(float);
+    size_t buffer_size = MAX_REC_PER_SLICE * recl;
+    char* thread_buffer = malloc(buffer_size);
+    if (!thread_buffer) {
+        fprintf(stderr, "Thread: Failed to allocate buffer for file %d\n", file_idx);
+        return;
+    }
+
+    // Thread-local bandpass (each thread needs its own)
+    BpassType thread_bpass;
+    memset(&thread_bpass, 0, sizeof(BpassType));
+    int baselines = r->user.baselines;
+    for (int bl = 0; bl < baselines; bl++) {
+        thread_bpass.abp[bl] = calloc(channels, sizeof(float));
+        thread_bpass.off_src[bl] = calloc(channels, sizeof(Complex));
+        for (int ch = 0; ch < channels; ch++) {
+            thread_bpass.abp[bl][ch] = 1.0f;
+            thread_bpass.off_src[bl][ch].r = 0.0f;
+            thread_bpass.off_src[bl][ch].i = 0.0f;
+        }
+    }
+
+    int rec_per_slice = r->user.recfile.rec_per_slice;
+    double integ = r->user.corr->daspar.lta * r->user.statime;
+
+    // Calculate slices
+    int start_slice = start_rec / rec_per_slice;
+    int end_rec = start_rec + n_rec - 1;
+    int end_slice = end_rec / rec_per_slice;
+
+    size_t local_count = 0;
+    size_t local_flagged = 0;
+
+    // Process each slice
+    for (int slice = start_slice; slice <= end_slice; slice++) {
+        if (read_slice(&r->user, file_idx, slice, thread_buffer) != 0) {
+            fprintf(stderr, "Thread: Failed to read file %d slice %d\n", file_idx, slice);
+            continue;
+        }
+
+        int n_vis = make_bpass(&r->user, &thread_bpass, thread_buffer, file_idx, slice);
+        if (n_vis < 0) continue;
+
+        int slice_start_rec = slice * rec_per_slice;
+        int slice_end_rec = slice_start_rec + rec_per_slice - 1;
+        int proc_start = (start_rec > slice_start_rec) ? start_rec : slice_start_rec;
+        int proc_end = (end_rec < slice_end_rec) ? end_rec : slice_end_rec;
+        int local_start = proc_start - slice_start_rec;
+        int local_end = proc_end - slice_start_rec;
+
+        // Process records
+        for (int local_rec = local_start; local_rec <= local_end; local_rec++) {
+            char* rec_ptr = thread_buffer + local_rec * recl;
+
+            double t_rec = r->user.recfile.t_start[file_idx] +
+                slice * r->user.recfile.slice_interval +
+                (local_rec + 0.5) * integ;
+            double mjd = r->user.recfile.mjd_ref + t_rec / 86400.0;
+
+            init_mat(&r->user, mjd);
+
+            int start_ch = thread_bpass.start_chan[local_rec];
+            int end_ch = thread_bpass.end_chan[local_rec];
+            if (start_ch < 0) start_ch = 0;
+            if (end_ch >= channels) end_ch = channels - 1;
+            if (end_ch < start_ch) continue;
+
+            double freq0 = r->freq_info.freq_start_hz;
+            int net_sign = r->user.srec->scan->source.net_sign[0];
+            double ch_width = r->freq_info.channel_width_hz * net_sign;
+
+            // Process baselines
+            for (int bl = 0; bl < baselines; bl++) {
+                unsigned short* vis_ptr = (unsigned short*)(rec_ptr +
+                    r->user.vispar.visinfo[bl].off);
+
+                float* abp = thread_bpass.abp[bl];
+                Complex* off_src = thread_bpass.off_src[bl];
+
+                for (int ch = start_ch; ch <= end_ch; ch++) {
+                    float re = half_to_float(vis_ptr[ch * 2]);
+                    float im = half_to_float(vis_ptr[ch * 2 + 1]);
+
+                    if (!isfinite(re) || !isfinite(im)) {
+                        local_flagged++;
+                        continue;
+                    }
+
+                    if (r->user.do_base) {
+                        re -= off_src[ch].r;
+                        im -= off_src[ch].i;
+                    }
+
+                    if (r->user.do_band && abp[ch] > 0.0f) {
+                        re /= abp[ch];
+                        im /= abp[ch];
+                    }
+
+                    double freq_ch = freq0 + ch * ch_width;
+                    double u, v, w;
+                    compute_uvw(r, bl, mjd, &u, &v, &w, freq_ch);
+
+                    // Create visibility
+                    CudaVisibility vis = {0};
+                    vis.re = re;
+                    vis.im = im;
+                    vis.weight = 1.0f;
+                    vis.u = (float)u;
+                    vis.v = (float)v;
+                    vis.w = (float)w;
+                    vis.channel = ch;
+                    vis.freq = (float)freq_ch;
+                    vis.d_phase = 0.0f;
+
+                    if (r->config.n_w_planes > 0) {
+                        vis.cf_cube = cf_select_w_plane((float)w, r->config.max_w, r->config.n_w_planes);
+                    } else {
+                        vis.cf_cube = 0;
+                    }
+
+                    vis.cf_grp = 0;
+                    vis.grid_cube = 0;
+                    vis.phase_grad_u = 0.0f;
+                    vis.phase_grad_v = 0.0f;
+
+                    // Push to queue
+                    vis_queue_push(queue, &vis);
+                    local_count++;
+
+                    // Hermitian conjugate
+                    CudaVisibility vis_conj = {0};
+                    vis_conj.re = re;
+                    vis_conj.im = -im;
+                    vis_conj.weight = 1.0f;
+                    vis_conj.u = (float)(-u);
+                    vis_conj.v = (float)(-v);
+                    vis_conj.w = (float)(-w);
+                    vis_conj.channel = ch;
+                    vis_conj.freq = (float)freq_ch;
+                    vis_conj.d_phase = 0.0f;
+
+                    if (r->config.n_w_planes > 0) {
+                        vis_conj.cf_cube = cf_select_w_plane((float)(-w), r->config.max_w, r->config.n_w_planes);
+                    } else {
+                        vis_conj.cf_cube = 0;
+                    }
+
+                    vis_conj.cf_grp = 0;
+                    vis_conj.grid_cube = 0;
+                    vis_conj.phase_grad_u = 0.0f;
+                    vis_conj.phase_grad_v = 0.0f;
+
+                    vis_queue_push(queue, &vis_conj);
+                    local_count++;
+                }
+            }
+        }
+    }
+
+    // Cleanup thread-local resources
+    for (int bl = 0; bl < baselines; bl++) {
+        free(thread_bpass.abp[bl]);
+        free(thread_bpass.off_src[bl]);
+    }
+    free(thread_buffer);
+
+    // Update counters
+    *args->thread_count = local_count;
+    *args->thread_flagged = local_flagged;
+
+    printf("  Thread finished file %d: %zu visibilities, %zu flagged\n",
+           file_idx, local_count, local_flagged);
+}
+
 size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* user_data) {
     struct SvfitsReaderImpl* r = reader;
     if (!r->initialized) {
@@ -254,217 +457,111 @@ size_t reader_process(SvfitsReader reader, VisibilityCallback callback, void* us
         return 0;
     }
 
-    size_t count = 0;
-    size_t flagged = 0;
-    double u_min = 1e30, u_max = -1e30, v_min = 1e30, v_max = -1e30;
     int channels = r->user.corr->daspar.channels;
     int baselines = r->user.baselines;
     int nfiles = r->user.recfile.nfiles;
-    int rec_per_slice = r->user.recfile.rec_per_slice;
-    size_t recl = r->user.corr->daspar.baselines * channels * sizeof(float);
-    double integ = r->user.corr->daspar.lta * r->user.statime;
-    BpassType* bpass = &r->user.bpass;
+    int num_threads = r->config.num_threads;
+    if (num_threads <= 0) num_threads = 1;
 
     int file_order[MaxRecFiles];
     get_file_order(&r->user, file_order);
 
-    printf("Processing: %d files, %d baselines, %d channels, rec_per_slice=%d\n",
-           nfiles, baselines, channels, rec_per_slice);
+    printf("PARALLEL Processing: %d files, %d baselines, %d channels, %d threads\n",
+           nfiles, baselines, channels, num_threads);
 
-    // Process each file in burst order
+    // Create shared visibility queue (10M visibilities = ~800MB buffer)
+    VisibilityQueue queue;
+    size_t queue_capacity = 10000000;  // Large buffer for maximum throughput
+    if (vis_queue_init(&queue, queue_capacity) != 0) {
+        fprintf(stderr, "Failed to create visibility queue\n");
+        return 0;
+    }
+
+    // Set active producers
+    queue.active_producers = nfiles;  // Each file is a producer
+
+    // Thread statistics
+    size_t* thread_counts = calloc(nfiles, sizeof(size_t));
+    size_t* thread_flagged = calloc(nfiles, sizeof(size_t));
+
+    // Prepare arguments for each file
+    FileProcessorArgs* args = calloc(nfiles, sizeof(FileProcessorArgs));
     for (int f = 0; f < nfiles; f++) {
-        int file_idx = file_order[f];
+        args[f].reader = r;
+        args[f].queue = &queue;
+        args[f].file_idx = file_order[f];
+        args[f].thread_count = &thread_counts[f];
+        args[f].thread_flagged = &thread_flagged[f];
+    }
 
-        int start_rec = r->user.recfile.start_rec[file_idx];
-        int n_rec = r->user.recfile.n_rec[file_idx];
+    // Launch producer threads in parallel
+    printf("Launching %d producer threads...\n", nfiles);
+    #pragma omp parallel for num_threads(num_threads)
+    for (int f = 0; f < nfiles; f++) {
+        process_file_to_queue(&args[f]);
+        vis_queue_producer_done(&queue);
+    }
 
-        if (n_rec <= 0) continue;
+    // Consumer thread (main thread) - pop from queue and grid on GPU
+    printf("Starting GPU consumer...\n");
+    size_t count = 0;
+    double u_min = 1e30, u_max = -1e30, v_min = 1e30, v_max = -1e30;
 
-        // Calculate which slices we need to read for this file
-        int start_slice = start_rec / rec_per_slice;
-        int end_rec = start_rec + n_rec - 1;
-        int end_slice = end_rec / rec_per_slice;
+    CudaVisibility batch[10000];  // Batch size for popping
+    while (!vis_queue_is_finished(&queue)) {
+        size_t n = vis_queue_pop_batch(&queue, batch, 10000);
 
-        printf("  File %d: start_rec=%d n_rec=%d, slices %d-%d\n",
-               file_idx, start_rec, n_rec, start_slice, end_slice);
+        if (n == 0) break;  // Queue finished
 
-        // Process each slice that contains burst data
-        for (int slice = start_slice; slice <= end_slice; slice++) {
-            // Read this slice
-            if (read_slice(&r->user, file_idx, slice, r->raw_buffer) != 0) {
-                fprintf(stderr, "Failed to read file %d slice %d\n", file_idx, slice);
-                continue;
+        // Process batch
+        for (size_t i = 0; i < n; i++) {
+            CudaVisibility* vis = &batch[i];
+
+            // Track UV stats
+            if (vis->u < u_min) u_min = vis->u;
+            if (vis->u > u_max) u_max = vis->u;
+            if (vis->v < v_min) v_min = vis->v;
+            if (vis->v > v_max) v_max = vis->v;
+
+            // Debug first few
+            if (count < 5) {
+                printf("  [vis %zu] u=%.1f v=%.1f w=%.1f re=%.3f im=%.3f cf_cube=%d\n",
+                       count, vis->u, vis->v, vis->w, vis->re, vis->im, vis->cf_cube);
             }
 
-            // CRITICAL: Call make_bpass to compute burst channel ranges and corrections
-            // This fills bpass->start_chan[], end_chan[], abp[], off_src[]
-            int n_vis = make_bpass(&r->user, bpass, r->raw_buffer, file_idx, slice);
-            if (n_vis < 0) {
-                fprintf(stderr, "make_bpass failed for file %d slice %d\n", file_idx, slice);
-                continue;
+            // Callback to gridder
+            if (callback(vis, user_data) != 0) {
+                vis_queue_destroy(&queue);
+                free(thread_counts);
+                free(thread_flagged);
+                free(args);
+                return count;
             }
+            count++;
+        }
 
-            // Determine which records within this slice to process
-            int slice_start_rec = slice * rec_per_slice;
-            int slice_end_rec = slice_start_rec + rec_per_slice - 1;
-
-            // Intersect with burst range [start_rec, start_rec + n_rec - 1]
-            int proc_start = (start_rec > slice_start_rec) ? start_rec : slice_start_rec;
-            int proc_end = (end_rec < slice_end_rec) ? end_rec : slice_end_rec;
-
-            // Convert to slice-local indices (0 to rec_per_slice-1)
-            int local_start = proc_start - slice_start_rec;
-            int local_end = proc_end - slice_start_rec;
-
-            // Process records within this slice
-            for (int local_rec = local_start; local_rec <= local_end; local_rec++) {
-                char* rec_ptr = r->raw_buffer + local_rec * recl;
-
-                // Time for this record (same formula as svfits)
-                double t_rec = r->user.recfile.t_start[file_idx] +
-                    slice * r->user.recfile.slice_interval +
-                    (local_rec + 0.5) * integ;  // middle of integration
-                double mjd = r->user.recfile.mjd_ref + t_rec / 86400.0;
-
-                init_mat(&r->user, mjd);
-
-                // Get burst channel range for this record (now properly computed by make_bpass!)
-                int start_ch = bpass->start_chan[local_rec];
-                int end_ch = bpass->end_chan[local_rec];
-
-                if (start_ch < 0) start_ch = 0;
-                if (end_ch >= channels) end_ch = channels - 1;
-                if (end_ch < start_ch) continue;  // No valid channels for this record
-
-                // Frequency info for this observation (signed channel width)
-                double freq0 = r->freq_info.freq_start_hz;
-                int net_sign = r->user.srec->scan->source.net_sign[0];
-                double ch_width = r->freq_info.channel_width_hz * net_sign;
-
-                // Process each baseline
-                for (int bl = 0; bl < baselines; bl++) {
-                    unsigned short* vis_ptr = (unsigned short*)(rec_ptr +
-                        r->user.vispar.visinfo[bl].off);
-
-                    float* abp = bpass->abp[bl];
-                    Complex* off_src = bpass->off_src[bl];
-
-                    // Process channels with burst signal
-                    for (int ch = start_ch; ch <= end_ch; ch++) {
-                        float re = half_to_float(vis_ptr[ch * 2]);
-                        float im = half_to_float(vis_ptr[ch * 2 + 1]);
-
-                        if (!isfinite(re) || !isfinite(im)) {
-                            flagged++;
-                            continue;
-                        }
-
-                        // Apply baseline subtraction (subtract off-source mean)
-                        if (r->user.do_base) {
-                            re -= off_src[ch].r;
-                            im -= off_src[ch].i;
-                        }
-
-                        // Apply bandpass correction (divide by amplitude)
-                        if (r->user.do_band && abp[ch] > 0.0f) {
-                            re /= abp[ch];
-                            im /= abp[ch];
-                        }
-
-                        // Channel frequency for MFS
-                        double freq_ch = freq0 + ch * ch_width;
-
-                        // Compute UVW in wavelengths at this channel's frequency
-                        double u, v, w;
-                        compute_uvw(r, bl, mjd, &u, &v, &w, freq_ch);
-
-                        // Create visibility - initialize ALL fields
-                        CudaVisibility vis = {0};  // Zero-initialize all fields
-                        vis.re = re;
-                        vis.im = im;
-                        vis.weight = 1.0f;
-                        vis.u = (float)u;
-                        vis.v = (float)v;
-                        vis.w = (float)w;
-                        vis.channel = ch;
-                        vis.freq = (float)freq_ch;
-                        vis.d_phase = 0.0f;
-
-                        // Select W-plane based on W coordinate
-                        if (r->config.n_w_planes > 0) {
-                            vis.cf_cube = cf_select_w_plane((float)w, r->config.max_w, r->config.n_w_planes);
-                        } else {
-                            vis.cf_cube = 0;
-                        }
-
-                        vis.cf_grp = 0;
-                        vis.grid_cube = 0;
-                        vis.phase_grad_u = 0.0f;
-                        vis.phase_grad_v = 0.0f;
-
-                        // Track UV stats
-                        if (u < u_min) u_min = u;
-                        if (u > u_max) u_max = u;
-                        if (v < v_min) v_min = v;
-                        if (v > v_max) v_max = v;
-
-                        // Debug: print first few UV values
-                        if (count < 5) {
-                            printf("  [vis %zu] bl=%d ch=%d u=%.1f v=%.1f w=%.1f re=%.3f im=%.3f\n",
-                                   count, bl, ch, u, v, w, re, im);
-                        }
-
-                        // Callback to gridder - grid the visibility
-                        if (callback(&vis, user_data) != 0) {
-                            return count;
-                        }
-                        count++;
-
-                        // Grid Hermitian conjugate: V*(-u,-v,-w)
-                        // For real-valued images, V(u,v) and V*(-u,-v) must both be gridded
-                        CudaVisibility vis_conj = {0};  // Zero-initialize
-                        vis_conj.re = re;           // Real part same
-                        vis_conj.im = -im;          // Imaginary part negated (conjugate)
-                        vis_conj.weight = 1.0f;
-                        vis_conj.u = (float)(-u);   // Negate U
-                        vis_conj.v = (float)(-v);   // Negate V
-                        vis_conj.w = (float)(-w);   // Negate W
-                        vis_conj.channel = ch;
-                        vis_conj.freq = (float)freq_ch;
-                        vis_conj.d_phase = 0.0f;
-
-                        // Select W-plane for conjugate (using negated W)
-                        if (r->config.n_w_planes > 0) {
-                            vis_conj.cf_cube = cf_select_w_plane((float)(-w), r->config.max_w, r->config.n_w_planes);
-                        } else {
-                            vis_conj.cf_cube = 0;
-                        }
-
-                        vis_conj.cf_grp = 0;
-                        vis_conj.grid_cube = 0;
-                        vis_conj.phase_grad_u = 0.0f;
-                        vis_conj.phase_grad_v = 0.0f;
-
-                        // Track conjugate UV stats
-                        if (-u < u_min) u_min = -u;
-                        if (-u > u_max) u_max = -u;
-                        if (-v < v_min) v_min = -v;
-                        if (-v > v_max) v_max = -v;
-
-                        if (callback(&vis_conj, user_data) != 0) {
-                            return count;
-                        }
-                        count++;
-                    }
-                }
-            }
+        // Print progress every 1M visibilities
+        if (count % 1000000 == 0) {
+            printf("  Gridded %zu M visibilities...\n", count / 1000000);
         }
     }
 
+    // Sum up thread statistics
+    size_t total_flagged = 0;
+    for (int f = 0; f < nfiles; f++) {
+        total_flagged += thread_flagged[f];
+    }
+
     printf("  Total: %zu visibilities\n", count);
-    printf("  Flagged: %zu (%.1f%%)\n", flagged, 100.0 * flagged / (count + flagged));
+    printf("  Flagged: %zu (%.1f%%)\n", total_flagged, 100.0 * total_flagged / (count + total_flagged));
     printf("  UV range (wavelengths): u=[%.1f, %.1f] v=[%.1f, %.1f]\n",
            u_min, u_max, v_min, v_max);
+
+    // Cleanup
+    vis_queue_destroy(&queue);
+    free(thread_counts);
+    free(thread_flagged);
+    free(args);
 
     return count;
 }
