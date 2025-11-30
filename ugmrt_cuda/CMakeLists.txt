@@ -128,10 +128,14 @@ target_link_libraries(cuda_gridder PUBLIC
 )
 
 # CUDA architecture (adjust for your GPU)
-# CUDA 12+ dropped compute_60/70, CUDA 13+ dropped more
-# Default to modern architectures
+# Common architectures:
+#   60,61 = Pascal (P100, GTX 10xx) - CUDA 8.0+
+#   70,75 = Volta/Turing (V100, RTX 20xx) - CUDA 9.0+
+#   80,86 = Ampere (A100, RTX 30xx) - CUDA 11.1+
+#   89,90 = Ada/Hopper (RTX 40xx, H100) - CUDA 11.8+
+# Use "native" to auto-detect, or specify manually
 set_target_properties(cuda_gridder PROPERTIES
-    CUDA_ARCHITECTURES "80;86;89;90"
+    CUDA_ARCHITECTURES "60;70;75;80"
 )
 
 #-----------------------------------------------------------------------------
